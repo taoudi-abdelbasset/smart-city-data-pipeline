@@ -141,7 +141,7 @@ services:
   airflow-init:
     image: apache/airflow:2.8.1
     container_name: airflow-init
-    user: root
+    user: "0:0"
     depends_on:
       postgres-airflow:
         condition: service_healthy
@@ -156,6 +156,7 @@ services:
     command: 
       - -c
       - |
+        airflow db init
         airflow db migrate
         airflow users create \
           --username admin \
@@ -175,7 +176,7 @@ services:
     image: apache/airflow:2.8.1
     container_name: airflow-webserver
     hostname: airflow-webserver
-    user: root
+    user: "0:0"
     depends_on:
       postgres-airflow:
         condition: service_healthy
@@ -207,7 +208,7 @@ services:
     image: apache/airflow:2.8.1
     container_name: airflow-scheduler
     hostname: airflow-scheduler
-    user: root
+    user: "0:0"
     depends_on:
       postgres-airflow:
         condition: service_healthy
@@ -224,6 +225,7 @@ services:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/logs:/opt/airflow/logs
       - ./airflow/plugins:/opt/airflow/plugins
+      - /var/run/docker.sock:/var/run/docker.sock
     command: scheduler
     networks:
       - smartcity-network

@@ -32,8 +32,8 @@ def main():
     
     # Write to HDFS
     hdfs_path = "hdfs://namenode:8020/smartcity/test/hello_world"
-    
     print(f"\n💾 Writing to HDFS: {hdfs_path}")
+    
     df.write.mode("overwrite").parquet(hdfs_path)
     
     print("\n✅ Data written successfully!")
