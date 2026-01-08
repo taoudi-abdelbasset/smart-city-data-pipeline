@@ -1,0 +1,17 @@
+{
+  "sensor_id": "AQ_LUX_002",
+  "sensor_name": "Cloche d'Or Industrial Monitoring",
+  "location": {
+    "gps": {
+      "latitude": 49.5850,
+      "longitude": 6.1250
+    },
+    "city": "Luxembourg City",
+    "zone": "industrial",
+    "address": "Cloche d'Or, Luxembourg"
+  },
+  "sensor_type": "multi_gas_particulate",
+  "protocol": "MQTT",
+  "manufacturer": "Airly",
+  "installed_date": "2024-08-20"
+}
