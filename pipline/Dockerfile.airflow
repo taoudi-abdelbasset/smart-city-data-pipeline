@@ -1,0 +1,22 @@
+FROM apache/airflow:latest
+
+USER root
+# Install Java (required for Spark)
+RUN apt-get update && \
+    apt-get install -y openjdk-17-jdk && \
+    apt-get clean
+
+# Download and install latest Spark (4.1.0 as of Jan 2026, Hadoop 3 profile)
+ENV SPARK_VERSION=4.1.0
+ENV HADOOP_VERSION=3
+RUN cd /opt && \
+    wget https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz && \
+    tar -xzf spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz && \
+    mv spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION} spark && \
+    rm spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz
+
+ENV SPARK_HOME=/opt/spark
+ENV PATH=$PATH:$SPARK_HOME/bin:$SPARK_HOME/sbin
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+
+USER airflow

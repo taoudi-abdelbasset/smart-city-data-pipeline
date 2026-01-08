@@ -1,18 +1,37 @@
 version: '3.8'
 
+x-airflow-common: &airflow-common
+  image: ${AIRFLOW_IMAGE:-custom-airflow:latest}  # Will use your built image
+  build:
+    context: .
+    dockerfile: Dockerfile.airflow
+  environment:
+    - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+    - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres-airflow/airflow
+    - AIRFLOW__CORE__FERNET_KEY=''  # Generate a real one for prod!
+    - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
+    - AIRFLOW__CORE__LOAD_EXAMPLES=false
+    - _PIP_ADDITIONAL_REQUIREMENTS=apache-airflow-providers-apache-spark  # Latest provider
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+  user: "0:0"  # Root for init, but you can switch to airflow uid later
+  networks:
+    - smartcity-network
+
 services:
   # ============================================================================
-  # HADOOP HDFS - Distributed Storage
+  # HADOOP HDFS
   # ============================================================================
   namenode:
     image: apache/hadoop:3.3.6
     container_name: namenode
     hostname: namenode
     command: ["hdfs", "namenode"]
-    user: root
     ports:
-      - "9870:9870"  # HDFS Web UI
-      - "8020:8020"  # HDFS Port
+      - "9870:9870"
+      - "8020:8020"
     environment:
       ENSURE_NAMENODE_DIR: "/tmp/hadoop-root/dfs/name"
     env_file:
@@ -32,7 +51,6 @@ services:
     container_name: datanode
     hostname: datanode
     command: ["hdfs", "datanode"]
-    user: root
     env_file:
       - ./hadoop.env
     volumes:
@@ -40,10 +58,11 @@ services:
     networks:
       - smartcity-network
     depends_on:
-      - namenode
+      namenode:
+        condition: service_healthy
 
   # ============================================================================
-  # KAFKA - Message Queue
+  # KAFKA (single node KRaft)
   # ============================================================================
   kafka:
     image: apache/kafka:latest
@@ -51,7 +70,6 @@ services:
     hostname: kafka
     ports:
       - "9092:9092"
-      - "9093:9093"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -65,6 +83,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
+      CLUSTER_ID: "Mk3OEYBSD34fcwNTJENDM2Qk"  # Random fixed ID
     volumes:
       - kafka-data:/var/lib/kafka/data
     networks:
@@ -76,21 +95,18 @@ services:
       retries: 5
 
   # ============================================================================
-  # SPARK - Stream & Batch Processing
+  # SPARK Standalone
   # ============================================================================
   spark-master:
     image: apache/spark:latest
     container_name: spark-master
     hostname: spark-master
-    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master",
-              "--host", "spark-master", "--port", "7077", "--webui-port", "8080"]
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --host spark-master --port 7077 --webui-port 8080
     ports:
-      - "8888:8080"   # Spark Master Web UI
-      - "7077:7077"   # Spark Master Port
+      - "8080:8080"  # Master UI
+      - "7077:7077"
     environment:
       - SPARK_MODE=master
-      - SPARK_MASTER_HOST=spark-master
-      - SPARK_MASTER_PORT=7077
     volumes:
       - ./spark-jobs:/opt/spark-jobs
       - ./data:/opt/data
@@ -103,11 +119,9 @@ services:
     image: apache/spark:latest
     container_name: spark-worker
     hostname: spark-worker
-    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker",
-              "spark://spark-master:7077"]
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
       - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
       - SPARK_WORKER_MEMORY=2G
       - SPARK_WORKER_CORES=2
     volumes:
@@ -119,12 +133,11 @@ services:
       - spark-master
 
   # ============================================================================
-  # AIRFLOW - Workflow Orchestration
+  # AIRFLOW
   # ============================================================================
   postgres-airflow:
     image: postgres:16
     container_name: postgres-airflow
-    hostname: postgres-airflow
     environment:
       - POSTGRES_USER=airflow
       - POSTGRES_PASSWORD=airflow
@@ -139,65 +152,28 @@ services:
       retries: 5
 
   airflow-init:
-    image: apache/airflow:2.8.1
+    <<: *airflow-common
     container_name: airflow-init
-    user: "0:0"
-    depends_on:
-      postgres-airflow:
-        condition: service_healthy
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres-airflow/airflow
-      - AIRFLOW__CORE__FERNET_KEY=''
-      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
-      - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - _PIP_ADDITIONAL_REQUIREMENTS=apache-airflow-providers-apache-spark==4.1.3
     entrypoint: /bin/bash
-    command: 
+    command:
       - -c
       - |
         airflow db init
         airflow db migrate
-        airflow users create \
-          --username admin \
-          --firstname Admin \
-          --lastname User \
-          --role Admin \
-          --email admin@example.com \
-          --password admin || true
-    volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./airflow/plugins:/opt/airflow/plugins
-    networks:
-      - smartcity-network
-
-  airflow-webserver:
-    image: apache/airflow:2.8.1
-    container_name: airflow-webserver
-    hostname: airflow-webserver
-    user: "0:0"
+        airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin || true
     depends_on:
       postgres-airflow:
         condition: service_healthy
-      airflow-init:
-        condition: service_completed_successfully
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
     ports:
       - "8082:8080"
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres-airflow/airflow
-      - AIRFLOW__CORE__FERNET_KEY=''
-      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
-      - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - _PIP_ADDITIONAL_REQUIREMENTS=apache-airflow-providers-apache-spark==4.1.3
-    volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./airflow/plugins:/opt/airflow/plugins
-    command: webserver
-    networks:
-      - smartcity-network
+    depends_on:
+      - postgres-airflow
+      - airflow-init
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 10s
@@ -205,38 +181,19 @@ services:
       retries: 5
 
   airflow-scheduler:
-    image: apache/airflow:2.8.1
+    <<: *airflow-common
     container_name: airflow-scheduler
-    hostname: airflow-scheduler
-    user: "0:0"
-    depends_on:
-      postgres-airflow:
-        condition: service_healthy
-      airflow-init:
-        condition: service_completed_successfully
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres-airflow/airflow
-      - AIRFLOW__CORE__FERNET_KEY=''
-      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
-      - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - _PIP_ADDITIONAL_REQUIREMENTS=apache-airflow-providers-apache-spark==4.1.3
-    volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./airflow/plugins:/opt/airflow/plugins
-      - /var/run/docker.sock:/var/run/docker.sock
     command: scheduler
-    networks:
-      - smartcity-network
+    depends_on:
+      - postgres-airflow
+      - airflow-init
 
   # ============================================================================
-  # POSTGRESQL - Structured Data Storage
+  # POSTGRESQL (app DB)
   # ============================================================================
   postgres:
     image: postgres:16
     container_name: postgres
-    hostname: postgres
     ports:
       - "5432:5432"
     environment:
@@ -247,64 +204,27 @@ services:
       - postgres-data:/var/lib/postgresql/data
     networks:
       - smartcity-network
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "smartcity"]
-      interval: 5s
-      retries: 5
 
   # ============================================================================
-  # REDIS - Real-time Cache
+  # REDIS
   # ============================================================================
   redis:
     image: redis:7-alpine
     container_name: redis
-    hostname: redis
     ports:
-      - "6380:6379"
+      - "6379:6379"  # Changed to standard port
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes
     networks:
       - smartcity-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
 
   # ============================================================================
-  # GRAFANA - Visualization
-  # ============================================================================
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    hostname: grafana
-    ports:
-      - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_INSTALL_PLUGINS=grafana-clock-panel
-    volumes:
-      - grafana-data:/var/lib/grafana
-    depends_on:
-      - postgres
-      - prometheus
-    networks:
-      - smartcity-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  # ============================================================================
-  # PROMETHEUS - Metrics Collection
+  # PROMETHEUS & GRAFANA
   # ============================================================================
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
-    hostname: prometheus
     ports:
       - "9090:9090"
     volumes:
@@ -315,19 +235,28 @@ services:
       - '--storage.tsdb.path=/prometheus'
     networks:
       - smartcity-network
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - smartcity-network
 
   # ============================================================================
-  # ADMINER - Database Management UI
+  # ADMINER
   # ============================================================================
   adminer:
     image: adminer:latest
     container_name: adminer
-    hostname: adminer
     ports:
       - "8083:8080"
     environment:

@@ -1,56 +1,32 @@
-"""
-Airflow DAG to run Spark Hello World Job
-"""
-from datetime import datetime, timedelta
 from airflow import DAG
+from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from airflow.operators.bash import BashOperator
-
-default_args = {
-    'owner': 'smartcity',
-    'depends_on_past': False,
-    'start_date': datetime(2026, 1, 8),
-    'email_on_failure': False,
-    'email_on_retry': False,
-    'retries': 1,
-    'retry_delay': timedelta(minutes=5),
-}
+from datetime import datetime
 
 dag = DAG(
-    'spark_hello_world_simple',
-    default_args=default_args,
-    description='Run Spark Hello World job and write to HDFS',
-    schedule_interval=None,  # Manual trigger only
+    'spark_hello_world_better',
+    start_date=datetime(2026, 1, 8),
+    schedule_interval=None,
     catchup=False,
-    tags=['spark', 'test', 'hdfs'],
 )
 
-# Task 1: Create HDFS directory if it doesn't exist
 create_hdfs_dir = BashOperator(
     task_id='create_hdfs_directory',
-    bash_command='docker exec namenode hdfs dfs -mkdir -p /smartcity/test || true',
+    bash_command='hdfs dfs -mkdir -p /smartcity/test',  # Run directly if hdfs cli is in PATH, or keep docker exec namenode
     dag=dag,
 )
 
-# Task 2: Run Spark job
-run_spark_job = BashOperator(
+run_spark = SparkSubmitOperator(
     task_id='run_spark_hello_world',
-    bash_command='''
-    docker exec spark-master /opt/spark/bin/spark-submit \
-      --master spark://spark-master:7077 \
-      --deploy-mode client \
-      --executor-memory 1G \
-      --total-executor-cores 2 \
-      /opt/spark-jobs/test/hello_world.py
-    ''',
+    application='/opt/spark-jobs/test/hello_world.py',
+    conn_id='spark_default',  # Your Spark connection
+    master='spark://spark-master:7077',  # Optional if set in connection
+    deploy_mode='client',  # Or 'cluster' if you want
+    executor_memory='1g',
+    total_executor_cores=2,
+    name='hello-world-airflow',
+    verbose=True,
     dag=dag,
 )
 
-# Task 3: Verify data in HDFS
-verify_hdfs = BashOperator(
-    task_id='verify_hdfs_data',
-    bash_command='docker exec namenode hdfs dfs -ls /smartcity/test/hello_world',
-    dag=dag,
-)
-
-# Set task dependencies
-create_hdfs_dir >> run_spark_job >> verify_hdfs
+create_hdfs_dir >> run_spark
