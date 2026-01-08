@@ -3,6 +3,83 @@
 ## simple-graphe-arch
 ```mermaid
 graph TB
+    subgraph "IoT DEVICES - Data Sources"
+        A1[RTSP Cameras<br/>Vehicle/Pedestrian Detection]
+        A2[SUMO Traffic<br/>Vehicle Telemetry]
+        A3[Air Quality Sensors<br/>PM2.5, AQI]
+        A4[Parking Sensors<br/>Occupancy via LoRaWAN]
+    end
+
+    subgraph "EDGE LAYER"
+        B1[MQTT Broker<br/>Mosquitto]
+        B2[RTSP Streams<br/>MediaMTX Server]
+    end
+
+    subgraph "INGESTION LAYER"
+        C1[Apache Kafka<br/>Topics:<br/>- camera-data<br/>- traffic-data<br/>- air-quality<br/>- parking-data]
+    end
+
+    subgraph "STREAM PROCESSING"
+        D1[Apache Spark Streaming<br/>- Real-time analytics<br/>- Congestion detection<br/>- Aggregations]
+    end
+
+    subgraph "BATCH PROCESSING"
+        E1[Apache Spark Batch<br/>- Historical analysis<br/>- Daily reports]
+        E2[Apache Airflow<br/>- Schedule jobs<br/>- Orchestrate ETL]
+    end
+
+    subgraph "STORAGE"
+        F1[(HDFS / S3<br/>Raw data<br/>Parquet format)]
+        F2[(PostgreSQL<br/>Aggregated data<br/>Query results)]
+        F3[(Redis<br/>Real-time cache)]
+    end
+
+    subgraph "ANALYTICS & ML"
+        H1[Spark ML<br/>Traffic prediction<br/>Anomaly detection]
+    end
+
+    subgraph "VISUALIZATION"
+        J1[Grafana<br/>Real-time dashboards]
+        J2[Web Dashboard<br/>React/Flask<br/>Traffic maps]
+    end
+
+    %% Data Flow
+    A1 -->|RTSP| B2
+    A2 -->|MQTT| B1
+    A3 -->|MQTT| B1
+    A4 -->|MQTT| B1
+
+    B1 --> C1
+    B2 -->|Analytics| C1
+
+    C1 --> D1
+    C1 --> E1
+
+    D1 --> F2
+    D1 --> F3
+    E1 --> F1
+    E2 -.->|Schedule| E1
+
+    F1 --> H1
+    F2 --> H1
+    
+    F2 --> J1
+    F3 --> J1
+    F2 --> J2
+    H1 --> J2
+
+    style A1 fill:#ff6b6b
+    style B1 fill:#4ecdc4
+    style C1 fill:#45b7d1
+    style D1 fill:#96ceb4
+    style E1 fill:#ffeaa7
+    style F1 fill:#dfe6e9
+    style H1 fill:#fd79a8
+    style J1 fill:#00b894
+```
+## full-prod-graphe-arch
+```mermaid
+graph TB
     subgraph "DATA SOURCES - IoT Layer"
         A1[RTSP Surveillance Cameras<br/>1000+ cameras citywide]
         A2[SUMO Traffic Simulator<br/>Vehicle telemetry]
