@@ -1,0 +1,21 @@
+{
+  "parking_lot_id": "PARK_LUX_002",
+  "has_license_plate_recognition": false,
+  "parking_lot_name": "Gare Centrale P+R",
+  "location": {
+    "gps": {
+      "latitude": 49.5995,
+      "longitude": 6.1338
+    },
+    "city": "Luxembourg City",
+    "zone": "train_station_district",
+    "area": "gare_centrale",
+    "address": "Place de la Gare, 1616 Luxembourg"
+  },
+  "total_spots": 180,
+  "sensor_type": "ultrasonic",
+  "protocol": "NB-IoT",
+  "base_rate": 1.5,
+  "parking_type": "park_and_ride",
+  "accepts": ["sedan", "suv", "truck", "electric", "motorcycle"]
+}

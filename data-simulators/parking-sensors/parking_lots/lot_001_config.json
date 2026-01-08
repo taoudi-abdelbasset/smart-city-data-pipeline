@@ -1,0 +1,21 @@
+{
+  "parking_lot_id": "PARK_LUX_001",
+  "has_license_plate_recognition": true,
+  "parking_lot_name": "Centre Ville Parking - Royal",
+  "location": {
+    "gps": {
+      "latitude": 49.6106,
+      "longitude": 6.1312
+    },
+    "city": "Luxembourg City",
+    "zone": "downtown",
+    "area": "centre_ville",
+    "address": "Rue du Fossé, 1536 Luxembourg"
+  },
+  "total_spots": 250,
+  "sensor_type": "magnetic_loop",
+  "protocol": "LoRaWAN",
+  "base_rate": 2.5,
+  "parking_type": "underground",
+  "accepts": ["sedan", "suv", "electric", "motorcycle"]
+}
