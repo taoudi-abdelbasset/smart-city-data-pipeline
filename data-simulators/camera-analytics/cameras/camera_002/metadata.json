@@ -1,0 +1,30 @@
+{
+  "camera_id": "CAM_LUX_002",
+  "camera_name": "Gare Centrale - Place de la Gare Pedestrian Zone",
+  "location": {
+    "gps": {
+      "latitude": 49.6000,
+      "longitude": 6.1342
+    },
+    "city": "Luxembourg City",
+    "zone": "train_station_district",
+    "intersection": "Place_de_la_Gare",
+    "address": "Place de la Gare, 1616 Luxembourg"
+  },
+  "camera_specs": {
+    "resolution": "1920x1080",
+    "fps": 30,
+    "rtsp_url": "rtsp://127.0.0.1:8554/stream2",
+    "protocol": "RTSP",
+    "encoding": "H.264"
+  },
+  "detection_config": {
+    "detect_vehicles": false,
+    "detect_pedestrians": true,
+    "detection_interval_seconds": 3,
+    "confidence_threshold": 0.5
+  },
+  "installed_date": "2024-01-20",
+  "status": "active",
+  "camera_type": "pedestrian_monitoring"
+}

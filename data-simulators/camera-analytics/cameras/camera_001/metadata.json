@@ -1,0 +1,30 @@
+{
+  "camera_id": "CAM_LUX_001",
+  "camera_name": "Boulevard Royal - Avenue de la Liberté Intersection",
+  "location": {
+    "gps": {
+      "latitude": 49.6116,
+      "longitude": 6.1319
+    },
+    "city": "Luxembourg City",
+    "zone": "downtown",
+    "intersection": "Boulevard_Royal_Ave_Liberte",
+    "address": "Boulevard Royal, 2449 Luxembourg"
+  },
+  "camera_specs": {
+    "resolution": "1920x1080",
+    "fps": 30,
+    "rtsp_url": "rtsp://127.0.0.1:8554/stream1",
+    "protocol": "RTSP",
+    "encoding": "H.264"
+  },
+  "detection_config": {
+    "detect_vehicles": true,
+    "detect_pedestrians": true,
+    "detection_interval_seconds": 2,
+    "confidence_threshold": 0.5
+  },
+  "installed_date": "2024-01-15",
+  "status": "active",
+  "camera_type": "traffic_intersection"
+}
