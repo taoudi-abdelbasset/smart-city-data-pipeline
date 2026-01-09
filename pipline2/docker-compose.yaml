@@ -82,35 +82,32 @@ services:
     networks:
       - smart-city-net
     ports:
-      - "9870:9870"  # Web UI
-      - "8020:8020"  # HDFS RPC port
+      - "9870:9870"
+      - "8020:8020"
     environment:
-      ENSURE_NAMENODE_DIR: "/tmp/hadoop-root/dfs/name"
+      - ENSURE_NAMENODE_DIR=/opt/hadoop/dfs/name
     env_file:
       - ./hadoop.env
-    command: ["hdfs", "namenode"]
+    # FIX: Using 'hdfs' directly or the correct absolute path
+    command: ["/bin/bash", "-c", "hdfs namenode"]
     volumes:
       - namenode_data:/opt/hadoop/dfs/name
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9870"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # ============================================
-  # HDFS DATANODE - Data Lake
-  # ============================================
   datanode:
     image: apache/hadoop:3.3.6
     container_name: datanode
     hostname: datanode
     networks:
       - smart-city-net
-    ports:
-      - "9864:9864"
     env_file:
       - ./hadoop.env
-    command: ["hdfs", "datanode"]
+    # FIX: Using 'hdfs' directly
+    command: ["/bin/bash", "-c", "hdfs datanode"]
     volumes:
       - datanode_data:/opt/hadoop/dfs/data
     depends_on:
