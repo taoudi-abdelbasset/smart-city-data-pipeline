@@ -78,17 +78,19 @@ services:
   namenode:
     image: apache/hadoop:3.3.6
     container_name: namenode
+    hostname: namenode
     networks:
       - smart-city-net
     ports:
       - "9870:9870"  # Web UI
-      - "9000:9000"  # HDFS port
+      - "8020:8020"  # HDFS RPC port
     environment:
-      HADOOP_HOME: /opt/hadoop
-      ENSURE_NAMENODE_DIR: /tmp/hadoop-root/dfs/name
+      ENSURE_NAMENODE_DIR: "/tmp/hadoop-root/dfs/name"
+    env_file:
+      - ./hadoop.env
     command: ["hdfs", "namenode"]
     volumes:
-      - namenode_data:/tmp/hadoop-root/dfs/name
+      - namenode_data:/opt/hadoop/dfs/name
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9870"]
       interval: 30s
@@ -101,17 +103,19 @@ services:
   datanode:
     image: apache/hadoop:3.3.6
     container_name: datanode
+    hostname: datanode
     networks:
       - smart-city-net
     ports:
       - "9864:9864"
-    environment:
-      HADOOP_HOME: /opt/hadoop
+    env_file:
+      - ./hadoop.env
     command: ["hdfs", "datanode"]
     volumes:
-      - datanode_data:/tmp/hadoop-root/dfs/data
+      - datanode_data:/opt/hadoop/dfs/data
     depends_on:
-      - namenode
+      namenode:
+        condition: service_healthy
 
   # ============================================
   # SPARK MASTER - Processing Engine
