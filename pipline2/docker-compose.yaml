@@ -1,5 +1,3 @@
-version: '3.8'
-
 # ============================================
 # SMART CITY DATA PIPELINE - DOCKER COMPOSE
 # ============================================
@@ -78,7 +76,7 @@ services:
   # HDFS NAMENODE - Data Lake
   # ============================================
   namenode:
-    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    image: apache/hadoop:3.3.6
     container_name: namenode
     networks:
       - smart-city-net
@@ -86,12 +84,11 @@ services:
       - "9870:9870"  # Web UI
       - "9000:9000"  # HDFS port
     environment:
-      CLUSTER_NAME: "smart-city-cluster"
-      CORE_CONF_fs_defaultFS: "hdfs://namenode:9000"
-      HDFS_CONF_dfs_replication: 1
-      HDFS_CONF_dfs_namenode_datanode_registration_ip___hostname___check: "false"
+      HADOOP_HOME: /opt/hadoop
+      ENSURE_NAMENODE_DIR: /tmp/hadoop-root/dfs/name
+    command: ["hdfs", "namenode"]
     volumes:
-      - namenode_data:/hadoop/dfs/name
+      - namenode_data:/tmp/hadoop-root/dfs/name
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9870"]
       interval: 30s
@@ -102,18 +99,17 @@ services:
   # HDFS DATANODE - Data Lake
   # ============================================
   datanode:
-    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    image: apache/hadoop:3.3.6
     container_name: datanode
     networks:
       - smart-city-net
     ports:
       - "9864:9864"
     environment:
-      CORE_CONF_fs_defaultFS: "hdfs://namenode:9000"
-      HDFS_CONF_dfs_replication: 1
-      HDFS_CONF_dfs_datanode_data_dir: "/hadoop/dfs/data"
+      HADOOP_HOME: /opt/hadoop
+    command: ["hdfs", "datanode"]
     volumes:
-      - datanode_data:/hadoop/dfs/data
+      - datanode_data:/tmp/hadoop-root/dfs/data
     depends_on:
       - namenode
 
@@ -121,19 +117,23 @@ services:
   # SPARK MASTER - Processing Engine
   # ============================================
   spark-master:
-    image: bitnami/spark:3.5.0
+    image: apache/spark:3.5.3-java17-python3
     container_name: spark-master
     networks:
       - smart-city-net
     ports:
       - "8080:8080"  # Web UI
       - "7077:7077"  # Spark Master port
+      - "4040:4040"  # Spark Application UI
     environment:
-      SPARK_MODE: master
-      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-      SPARK_RPC_ENCRYPTION_ENABLED: "no"
-      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
-      SPARK_SSL_ENABLED: "no"
+      - SPARK_MODE=master
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+    command: >
+      bash -c "
+      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+      "
     volumes:
       - ./spark-jobs:/opt/spark-jobs
       - spark_logs:/opt/spark/logs
@@ -147,21 +147,22 @@ services:
   # SPARK WORKER - Processing Engine
   # ============================================
   spark-worker:
-    image: bitnami/spark:3.5.0
+    image: apache/spark:3.5.3-java17-python3
     container_name: spark-worker
     networks:
       - smart-city-net
     ports:
       - "8081:8081"
     environment:
-      SPARK_MODE: worker
-      SPARK_MASTER_URL: spark://spark-master:7077
-      SPARK_WORKER_MEMORY: 2G
-      SPARK_WORKER_CORES: 2
-      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-      SPARK_RPC_ENCRYPTION_ENABLED: "no"
-      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
-      SPARK_SSL_ENABLED: "no"
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=2g
+      - SPARK_WORKER_WEBUI_PORT=8081
+    command: >
+      bash -c "
+      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+      "
     volumes:
       - ./spark-jobs:/opt/spark-jobs
     depends_on:
