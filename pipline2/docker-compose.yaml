@@ -79,35 +79,54 @@ services:
     image: apache/hadoop:3.3.6
     container_name: namenode
     hostname: namenode
+    user: root
     networks:
       - smart-city-net
     ports:
-      - "9870:9870"
-      - "8020:8020"
+      - "9870:9870"  # Web UI
+      - "8020:8020"  # HDFS RPC port
     environment:
       - ENSURE_NAMENODE_DIR=/opt/hadoop/dfs/name
+      - CLUSTER_NAME=smartcity
     env_file:
       - ./hadoop.env
-    # FIX: Using 'hdfs' directly or the correct absolute path
-    command: ["/bin/bash", "-c", "hdfs namenode"]
+    command: >
+      bash -c "
+      mkdir -p /opt/hadoop/dfs/name &&
+      chmod -R 755 /opt/hadoop/dfs/name &&
+      if [ ! -f /opt/hadoop/dfs/name/current/VERSION ]; then
+        hdfs namenode -format -force -clusterID smartcity;
+      fi &&
+      hdfs namenode
+      "
     volumes:
       - namenode_data:/opt/hadoop/dfs/name
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9870"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
+  # ============================================
+  # HDFS DATANODE - Data Lake
+  # ============================================
   datanode:
     image: apache/hadoop:3.3.6
     container_name: datanode
     hostname: datanode
+    user: root
     networks:
       - smart-city-net
+    ports:
+      - "9864:9864"
     env_file:
       - ./hadoop.env
-    # FIX: Using 'hdfs' directly
-    command: ["/bin/bash", "-c", "hdfs datanode"]
+    command: >
+      bash -c "
+      mkdir -p /opt/hadoop/dfs/data &&
+      chmod -R 755 /opt/hadoop/dfs/data &&
+      hdfs datanode
+      "
     volumes:
       - datanode_data:/opt/hadoop/dfs/data
     depends_on:
