@@ -1,6 +1,9 @@
-FROM python:3.11-slim
+FROM ubuntu:22.04
 
 WORKDIR /app
+
+# Prevent interactive prompts during build
+ENV DEBIAN_FRONTEND=noninteractive
 
 # Install SUMO and dependencies
 RUN apt-get update && \
@@ -8,11 +11,11 @@ RUN apt-get update && \
     software-properties-common \
     wget \
     gnupg \
-    procps && \
-    wget -qO - https://sumo.dlr.de/sumo.gpg.key | apt-key add - && \
-    add-apt-repository "deb https://sumo.dlr.de/apt jammy main" && \
+    procps \
+    ca-certificates && \
+    add-apt-repository ppa:sumo/stable && \
     apt-get update && \
-    apt-get install -y sumo sumo-tools && \
+    apt-get install -y sumo sumo-tools python3 python3-pip && \
     rm -rf /var/lib/apt/lists/*
 
 # Set SUMO_HOME
@@ -21,10 +24,10 @@ ENV PATH="${SUMO_HOME}/bin:${PATH}"
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copy application
 COPY sumo_mqtt_connector.py .
 
 # Run SUMO in headless mode with TraCI, then connector
-CMD ["sh", "-c", "sumo -c /app/LuSTScenario/scenario/dua.actuated.sumocfg --remote-port 8813 & sleep 5 && python -u sumo_mqtt_connector.py"]
+CMD ["sh", "-c", "sumo -c /app/LuSTScenario/scenario/dua.actuated.sumocfg --remote-port 8813 & sleep 5 && python3 -u sumo_mqtt_connector.py"]

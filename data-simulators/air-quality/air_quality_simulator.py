@@ -6,6 +6,7 @@ Sends data via MQTT protocol (continuous monitoring)
 """
 
 import json
+import os
 import time
 import random
 from datetime import datetime
@@ -272,8 +273,10 @@ def main():
         mqtt_client = None
         if MQTT_AVAILABLE:
             try:
+                mqtt_host = os.getenv('MQTT_HOST', 'localhost')
+                mqtt_port = int(os.getenv('MQTT_PORT', '1883'))
                 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-                mqtt_client.connect("localhost", 1883, 60)
+                mqtt_client.connect(mqtt_host, mqtt_port, 60)
                 mqtt_client.loop_start()
             except:
                 mqtt_client = None

@@ -124,7 +124,7 @@ services:
       - SUMO_PORT=8813
       - UPDATE_INTERVAL=5
     volumes:
-      - ./sumo-traffic/LuSTScenario:/app/LuSTScenario:ro
+      - ./sumo-traffic/LuSTScenario:/app/LuSTScenario
     networks:
       - smart-city-network
     healthcheck:
@@ -132,24 +132,6 @@ services:
       interval: 60s
       timeout: 10s
       retries: 3
-
-  # MQTT to Kafka Bridge (optional)
-  mqtt-kafka-bridge:
-    build:
-      context: .
-      dockerfile: Dockerfile.bridge
-    container_name: smart-city-mqtt-bridge
-    restart: unless-stopped
-    depends_on:
-      - mosquitto
-    environment:
-      - MQTT_HOST=mosquitto
-      - MQTT_PORT=1883
-      - KAFKA_BOOTSTRAP_SERVERS=your-kafka-server:9092
-    networks:
-      - smart-city-network
-    profiles:
-      - with-kafka
 
 networks:
   smart-city-network:
