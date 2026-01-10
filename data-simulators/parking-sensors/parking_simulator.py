@@ -1,3 +1,4 @@
+# from my local mahcine code
 #!/usr/bin/env python3
 """
 Smart City - Parking Lot IoT Simulator
@@ -291,29 +292,11 @@ def main():
     import sys
     import multiprocessing
     
-    # Setup MQTT client
-    mqtt_client = None
-    if MQTT_AVAILABLE:
-        print("🔌 Connecting to MQTT Broker...")
-        mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-        
-        try:
-            mqtt_client.connect("localhost", 1883, 60)
-            mqtt_client.loop_start()
-            print("✅ Connected to MQTT (localhost:1883)")
-        except Exception as e:
-            print(f"⚠️  MQTT connection failed: {e}")
-            print("   Continuing without MQTT (JSON output only)")
-            mqtt_client = None
-    
-    print("")
-    
     # Get all parking lot config files
     config_dir = Path("parking_lots")
     
     if not config_dir.exists():
         print("❌ Error: 'parking_lots/' folder not found")
-        print("   Create: parking_lots/lot_001_config.json")
         sys.exit(1)
     
     config_files = list(config_dir.glob("*_config.json"))
@@ -325,47 +308,46 @@ def main():
     print(f"🅿️  Found {len(config_files)} parking lots")
     print("="*80)
     
-    # Initialize all parking lots
-    parking_lots = []
-    for config_file in sorted(config_files):
+    # Helper function to run each parking lot in separate process
+    def run_parking_lot(config_file):
+        """Each process creates its OWN MQTT client"""
+        mqtt_client = None
+        if MQTT_AVAILABLE:
+            try:
+                mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+                mqtt_client.connect("localhost", 1883, 60)
+                mqtt_client.loop_start()
+            except:
+                mqtt_client = None
+        
+        lot = ParkingLotIoT(config_file, mqtt_client)
         try:
-            lot = ParkingLotIoT(config_file, mqtt_client)
-            parking_lots.append(lot)
-        except Exception as e:
-            print(f"❌ Failed to load {config_file.name}: {e}")
-    
-    if not parking_lots:
-        print("❌ No parking lots could be initialized")
-        sys.exit(1)
+            lot.stream(status_interval=30, event_probability=0.3)
+        finally:
+            if mqtt_client:
+                mqtt_client.loop_stop()
+                mqtt_client.disconnect()
     
     print("\n" + "="*80)
     print("🚀 Starting Parking IoT simulation...")
     print("   Protocol: LoRaWAN (via MQTT)")
-    print("   Event-based + periodic updates")
-    print("   This is ONLY IoT device simulation")
-    if mqtt_client:
-        print("   📡 Publishing to MQTT topics: parking/{lot_id}/{event|status}")
-    print(f"   Running {len(parking_lots)} parking lot(s) simultaneously")
+    print("   📡 Publishing to MQTT topics: parking/{lot_id}/{event|status}")
+    print(f"   Running {len(config_files)} parking lot(s)")
     print("="*80 + "\n")
     
-    # Run ALL parking lots simultaneously in separate processes
+    # Run ALL parking lots simultaneously
     processes = []
     
     try:
-        for lot in parking_lots:
-            # Each parking lot runs in its own process
-            p = multiprocessing.Process(target=lot.stream, kwargs={
-                'status_interval': 30,
-                'event_probability': 0.3
-            })
+        for config_file in sorted(config_files):
+            p = multiprocessing.Process(target=run_parking_lot, args=(config_file,))
             p.start()
             processes.append(p)
-            print(f"✅ Started process for {lot.parking_lot_id}")
+            print(f"✅ Started process for {config_file.stem}")
         
         print(f"\n🔥 All {len(processes)} parking lots running!")
         print("   Press Ctrl+C to stop all\n")
         
-        # Wait for all processes
         for p in processes:
             p.join()
             
@@ -375,10 +357,6 @@ def main():
             p.terminate()
             p.join()
         print("✅ All parking lots stopped")
-    finally:
-        if mqtt_client:
-            mqtt_client.loop_stop()
-            mqtt_client.disconnect()
 
 
 if __name__ == "__main__":

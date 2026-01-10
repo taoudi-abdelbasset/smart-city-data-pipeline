@@ -1,0 +1,2 @@
+ffplay -rtsp_transport tcp -fflags nobuffer -flags low_delay rtsp://3.82.156.95:8554/stream1
+

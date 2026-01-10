@@ -1,0 +1,161 @@
+version: '3.8'
+
+services:
+  # MQTT Broker - shared infrastructure
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: smart-city-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    networks:
+      - smart-city-network
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # MediaMTX - RTSP server for cameras
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: smart-city-mediamtx
+    restart: unless-stopped
+    ports:
+      - "8554:8554"  # RTSP
+      - "8888:8888"  # WebRTC
+      - "8889:8889"  # HLS
+    volumes:
+      - ./camera-analytics/mediamtx.yml:/mediamtx.yml
+    networks:
+      - smart-city-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9997/v3/config/get"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Air Quality Sensors
+  air-quality:
+    build:
+      context: ./air-quality
+      dockerfile: Dockerfile
+    container_name: smart-city-air-quality
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    environment:
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - UPDATE_INTERVAL=300
+    volumes:
+      - ./air-quality/air_quality_sensors:/app/air_quality_sensors:ro
+    networks:
+      - smart-city-network
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "air_quality_simulator.py"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  # Parking Sensors
+  parking-sensors:
+    build:
+      context: ./parking-sensors
+      dockerfile: Dockerfile
+    container_name: smart-city-parking
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    environment:
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - STATUS_INTERVAL=30
+      - EVENT_PROBABILITY=0.3
+    volumes:
+      - ./parking-sensors/parking_lots:/app/parking_lots:ro
+    networks:
+      - smart-city-network
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "parking_simulator.py"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  # RTSP Camera Simulator
+  camera-simulator:
+    build:
+      context: ./camera-analytics
+      dockerfile: Dockerfile
+    container_name: smart-city-cameras
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+    environment:
+      - RTSP_SERVER=mediamtx
+      - RTSP_PORT=8554
+    volumes:
+      - ./camera-analytics/cameras:/app/cameras:ro
+    networks:
+      - smart-city-network
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "camera_simulator.py"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  # SUMO Traffic Simulation
+  sumo-traffic:
+    build:
+      context: ./sumo-traffic
+      dockerfile: Dockerfile
+    container_name: smart-city-sumo
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    environment:
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - SUMO_PORT=8813
+      - UPDATE_INTERVAL=5
+    volumes:
+      - ./sumo-traffic/LuSTScenario:/app/LuSTScenario:ro
+    networks:
+      - smart-city-network
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "sumo"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  # MQTT to Kafka Bridge (optional)
+  mqtt-kafka-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.bridge
+    container_name: smart-city-mqtt-bridge
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    environment:
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - KAFKA_BOOTSTRAP_SERVERS=your-kafka-server:9092
+    networks:
+      - smart-city-network
+    profiles:
+      - with-kafka
+
+networks:
+  smart-city-network:
+    driver: bridge
+    name: smart-city-network
+
+volumes:
+  mosquitto-data:
+  mosquitto-log:
