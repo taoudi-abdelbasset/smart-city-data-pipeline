@@ -1,14 +1,6 @@
 # ============================================
 # SMART CITY DATA PIPELINE - DOCKER COMPOSE
-# ============================================
-# This compose file contains:
-# - Apache Kafka (data ingestion)
-# - Apache Spark (streaming + batch processing)
-# - Apache Airflow (orchestration)
-# - HDFS (data lake storage)
-# - PostgreSQL (analytics DB)
-# - Redis (real-time cache)
-# - Grafana (visualization)
+# FIXED: Airflow can now trigger Spark jobs
 # ============================================
 
 networks:
@@ -135,6 +127,7 @@ services:
 
   # ============================================
   # SPARK MASTER - Processing Engine
+  # FIXED: Added port 6066 for REST API
   # ============================================
   spark-master:
     image: apache/spark:3.5.3-java17-python3
@@ -145,14 +138,20 @@ services:
       - "8080:8080"  # Web UI
       - "7077:7077"  # Spark Master port
       - "4040:4040"  # Spark Application UI
+      - "6066:6066"  # REST API port
     environment:
       - SPARK_MODE=master
       - SPARK_MASTER_HOST=spark-master
       - SPARK_MASTER_PORT=7077
       - SPARK_MASTER_WEBUI_PORT=8080
+    # FIXED COMMAND: Add --rest flag to enable REST API
     command: >
       bash -c "
-      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master \
+        --host spark-master \
+        --port 7077 \
+        --webui-port 8080 \
+        --rest
       "
     volumes:
       - ./spark-jobs:/opt/spark-jobs
@@ -252,6 +251,7 @@ services:
 
   # ============================================
   # AIRFLOW WEBSERVER - Orchestration UI
+  # FIXED: Added Docker provider and requests library
   # ============================================
   airflow-webserver:
     image: apache/airflow:2.8.0-python3.11
@@ -272,11 +272,14 @@ services:
       _AIRFLOW_WWW_USER_CREATE: 'true'
       _AIRFLOW_WWW_USER_USERNAME: admin
       _AIRFLOW_WWW_USER_PASSWORD: admin
+      # ADDED: Install packages on startup
+      _PIP_ADDITIONAL_REQUIREMENTS: "apache-airflow-providers-docker requests"
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/logs:/opt/airflow/logs
       - ./airflow/plugins:/opt/airflow/plugins
       - ./spark-jobs:/opt/spark-jobs
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       airflow-postgres:
         condition: service_healthy
@@ -289,6 +292,7 @@ services:
 
   # ============================================
   # AIRFLOW SCHEDULER - DAG Execution
+  # FIXED: Added Docker provider and requests library
   # ============================================
   airflow-scheduler:
     image: apache/airflow:2.8.0-python3.11
@@ -299,11 +303,14 @@ services:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
       AIRFLOW__CORE__FERNET_KEY: 'UKMzEm3yIuFYEq1y3-2FxPNWSVwRASpahmQ9kQfEr8E='
+      # ADDED: Install packages on startup
+      _PIP_ADDITIONAL_REQUIREMENTS: "apache-airflow-providers-docker requests"
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/logs:/opt/airflow/logs
       - ./airflow/plugins:/opt/airflow/plugins
       - ./spark-jobs:/opt/spark-jobs
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       airflow-postgres:
         condition: service_healthy
