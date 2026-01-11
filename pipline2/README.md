@@ -341,3 +341,278 @@ docker-compose down --rmi all
 - ✅ Visualization (Grafana)
 
 **Ready for production IoT data streams from your simulation instance!**
+
+```yml
+# Exmaple ref (othe reject)
+version: "3.8"
+
+services:
+  # Zookeeper for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    networks:
+      - smart-city-network
+
+  # Kafka Broker
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - smart-city-network
+
+  hdfs-init:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: hdfs-init
+    depends_on:
+      - namenode
+    networks:
+      - smart-city-network
+    entrypoint: /bin/bash
+    command: >
+      -c "
+      echo 'Waiting for HDFS...' &&
+      sleep 20 &&
+      hdfs dfs -mkdir -p /data/raw/traffic &&
+      hdfs dfs -mkdir -p /data/processed/traffic &&
+      hdfs dfs -mkdir -p /data/analytics/traffic &&
+      hdfs dfs -chmod -R 777 /data
+      && echo 'Folders initialized'
+      "
+  # Hadoop NameNode
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: namenode
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    environment:
+      - CLUSTER_NAME=smart-city
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+      - HDFS_CONF_dfs_replication=1
+    volumes:
+      - namenode-data:/hadoop/dfs/name
+      - ./data:/data
+    networks:
+      - smart-city-network
+
+  # Hadoop DataNode
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode
+    ports:
+      - "9864:9864"
+    depends_on:
+      - namenode
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+      - HDFS_CONF_dfs_replication=1
+      - HDFS_CONF_dfs_datanode_hostname=datanode
+      - HDFS_CONF_dfs_client_use_datanode_hostname=true
+    volumes:
+      - datanode-data:/hadoop/dfs/data
+    networks:
+      - smart-city-network
+
+  # Spark Master (using apache/spark official image)
+  spark-master:
+    image: apache/spark:3.5.0-scala2.12-java11-python3-ubuntu
+    container_name: spark-master
+    hostname: spark-master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    volumes:
+      - ./scripts:/opt/scripts
+      - ./data:/data
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    networks:
+      - smart-city-network
+
+  # Spark Worker
+  spark-worker:
+    image: apache/spark:3.5.0-scala2.12-java11-python3-ubuntu
+    container_name: spark-worker
+    hostname: spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=2g
+      - SPARK_WORKER_PORT=8881
+      - SPARK_WORKER_WEBUI_PORT=8081
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./scripts:/opt/scripts
+      - ./data:/data
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    networks:
+      - smart-city-network
+
+  # Airflow PostgreSQL
+  postgres:
+    image: postgres:13
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - smart-city-network
+
+  # Airflow Init (one-time setup)
+  airflow-init:
+    image: apache/airflow:2.7.3-python3.11
+    container_name: airflow-init
+    depends_on:
+      - postgres
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: "FB0o_zt4e3Ziq3LdUUO7F2Z95cvFFx16hU8jTeR1ASM="
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: "admin"
+      _AIRFLOW_WWW_USER_PASSWORD: "admin"
+      _AIRFLOW_WWW_USER_ROLE: "Admin"
+      _AIRFLOW_WWW_USER_EMAIL: "admin@example.com"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+    entrypoint: /bin/bash
+    command: >
+      -c "airflow db migrate"
+
+    networks:
+      - smart-city-network
+
+  # Airflow Webserver
+  airflow-webserver:
+    image: apache/airflow:2.7.3-python3.11
+    container_name: airflow-webserver
+    depends_on:
+      - postgres
+      - airflow-init
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: "FB0o_zt4e3Ziq3LdUUO7F2Z95cvFFx16hU8jTeR1ASM="
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "airflow_secret_key"
+      # _AIRFLOW_DB_MIGRATE: "true"
+      # _AIRFLOW_WWW_USER_CREATE: "true"
+      # _AIRFLOW_WWW_USER_USERNAME: admin
+      # _AIRFLOW_WWW_USER_PASSWORD: admin
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./scripts:/opt/airflow/scripts
+    command: webserver
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - smart-city-network
+
+  # Airflow Scheduler
+  airflow-scheduler:
+    image: apache/airflow:2.7.3-python3.11
+    container_name: airflow-scheduler
+    depends_on:
+      - postgres
+      - airflow-init
+      - airflow-webserver
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: "FB0o_zt4e3Ziq3LdUUO7F2Z95cvFFx16hU8jTeR1ASM="
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./scripts:/opt/airflow/scripts
+    command: scheduler
+    networks:
+      - smart-city-network
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_INSTALL_PLUGINS: grafana-clock-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./dashboards:/etc/grafana/provisioning/dashboards
+    networks:
+      - smart-city-network
+
+volumes:
+  zookeeper-data:
+  zookeeper-logs:
+  kafka-data:
+  namenode-data:
+  datanode-data:
+  postgres-data:
+  grafana-data:
+
+networks:
+  smart-city-network:
+    driver: bridge
+```

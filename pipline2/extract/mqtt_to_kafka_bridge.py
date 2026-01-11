@@ -1,78 +1,69 @@
 #!/usr/bin/env python3
 """
-Smart City - MQTT to Kafka Bridge
-Subscribes to all MQTT topics from IoT sensors and publishes to Kafka topics
-Handles: Air Quality, Parking, SUMO Traffic data
+MQTT to Kafka Bridge - Smart City Data Pipeline
+Connects to MQTT broker on simulation VM (10.0.1.134)
+Extracts IoT sensor data and publishes to Kafka topics
 """
 
 import json
-import os
-import sys
+import time
 import signal
+import sys
 from datetime import datetime
-
-try:
-    import paho.mqtt.client as mqtt
-    MQTT_AVAILABLE = True
-except ImportError:
-    print("❌ paho-mqtt not installed. Install with: pip install paho-mqtt")
-    MQTT_AVAILABLE = False
-    sys.exit(1)
-
-try:
-    from kafka import KafkaProducer
-    from kafka.errors import KafkaError
-    KAFKA_AVAILABLE = True
-except ImportError:
-    print("❌ kafka-python not installed. Install with: pip install kafka-python")
-    KAFKA_AVAILABLE = False
-    sys.exit(1)
-
+from kafka import KafkaProducer
+import paho.mqtt.client as mqtt
 
 class MQTTToKafkaBridge:
     """
-    Bridge between MQTT and Kafka
-    - Subscribes to MQTT topics: air_quality/#, parking/#, traffic/#
-    - Publishes to Kafka topics with same structure
+    Bridge between MQTT (simulation VM) and Kafka (pipeline VM)
+    Subscribes to all MQTT topics and forwards to appropriate Kafka topics
     """
     
-    def __init__(self, 
-                 mqtt_host="localhost", 
-                 mqtt_port=1883,
-                 kafka_bootstrap_servers="localhost:9092"):
-        
-        self.mqtt_host = mqtt_host
-        self.mqtt_port = mqtt_port
-        self.kafka_bootstrap = kafka_bootstrap_servers
-        
+    def __init__(self):
+        # MQTT Configuration (Simulation VM)
+        self.mqtt_host = "10.0.1.134"
+        self.mqtt_port = 1883
         self.mqtt_client = None
+        
+        # Kafka Configuration (Local - Pipeline VM)
+        self.kafka_bootstrap_servers = "localhost:9093"
         self.kafka_producer = None
         
-        self.message_count = 0
-        self.error_count = 0
+        # Statistics
+        self.stats = {
+            "messages_received": 0,
+            "messages_sent": 0,
+            "errors": 0,
+            "start_time": datetime.now()
+        }
         
-        print("=" * 80)
-        print("🌉 MQTT to Kafka Bridge")
-        print("=" * 80)
-        print(f"MQTT Broker: {mqtt_host}:{mqtt_port}")
-        print(f"Kafka Broker: {kafka_bootstrap_servers}")
+        # Topic mapping: MQTT topic pattern -> Kafka topic
+        self.topic_mapping = {
+            "air_quality": "smart-city-air-quality",
+            "parking": "smart-city-parking",
+            "traffic/sumo/edges": "smart-city-traffic-edges",
+            "traffic/sumo/vehicles": "smart-city-traffic-vehicles",
+            "traffic/sumo/traffic_lights": "smart-city-traffic-lights",
+            "traffic/sumo/simulation": "smart-city-simulation-stats"
+        }
+        
+        print("🌉 MQTT to Kafka Bridge Initializing...")
         print("=" * 80)
     
     def setup_kafka(self):
         """Initialize Kafka producer"""
-        print("\n📡 Connecting to Kafka...")
+        print(f"\n📤 Connecting to Kafka: {self.kafka_bootstrap_servers}")
         
         try:
             self.kafka_producer = KafkaProducer(
-                bootstrap_servers=self.kafka_bootstrap,
+                bootstrap_servers=self.kafka_bootstrap_servers,
                 value_serializer=lambda v: json.dumps(v).encode('utf-8'),
                 key_serializer=lambda k: k.encode('utf-8') if k else None,
-                acks='all',  # Wait for all replicas
+                acks='all',
                 retries=3,
                 max_in_flight_requests_per_connection=1,
                 compression_type='gzip'
             )
-            
             print("✅ Connected to Kafka!")
             return True
             
@@ -81,14 +72,11 @@ class MQTTToKafkaBridge:
             return False
     
     def setup_mqtt(self):
-        """Initialize MQTT client and callbacks"""
-        print("\n📡 Connecting to MQTT...")
+        """Initialize MQTT client and connect to simulation VM"""
+        print(f"\n📥 Connecting to MQTT Broker: {self.mqtt_host}:{self.mqtt_port}")
         
         try:
-            self.mqtt_client = mqtt.Client(
-                mqtt.CallbackAPIVersion.VERSION2,
-                client_id="mqtt_kafka_bridge"
-            )
+            self.mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
             
             # Set callbacks
             self.mqtt_client.on_connect = self.on_mqtt_connect
@@ -97,8 +85,7 @@ class MQTTToKafkaBridge:
             
             # Connect
             self.mqtt_client.connect(self.mqtt_host, self.mqtt_port, 60)
-            
-            print("✅ Connected to MQTT!")
+            print("✅ Connected to MQTT Broker!")
             return True
             
         except Exception as e:
@@ -107,236 +94,176 @@ class MQTTToKafkaBridge:
     
     def on_mqtt_connect(self, client, userdata, flags, reason_code, properties):
         """Callback when connected to MQTT broker"""
-        print("\n🔌 MQTT Connected! Subscribing to topics...")
+        print("\n🔔 MQTT Connected! Subscribing to all topics...")
         
-        # Subscribe to all IoT sensor topics
-        topics = [
-            ("air_quality/#", 0),      # Air quality sensors
-            ("parking/#", 0),          # Parking sensors
-            ("traffic/#", 0),          # SUMO traffic data
-        ]
+        # Subscribe to ALL topics with wildcard
+        client.subscribe("#", qos=1)
         
-        for topic, qos in topics:
-            client.subscribe(topic, qos)
-            print(f"   ✅ Subscribed to: {topic}")
-        
-        print("\n" + "=" * 80)
-        print("🚀 Bridge is LIVE - forwarding MQTT → Kafka")
-        print("=" * 80 + "\n")
+        print("✅ Subscribed to all MQTT topics (#)")
+        print("\n📊 Waiting for messages...")
+        print("=" * 80)
     
-    def on_mqtt_disconnect(self, client, userdata, flags, reason_code, properties):
-        """Callback when disconnected from MQTT"""
-        print(f"\n⚠️  Disconnected from MQTT (reason: {reason_code})")
-        print("   Attempting to reconnect...")
+    def on_mqtt_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
+        """Callback when disconnected from MQTT broker"""
+        print(f"\n⚠️  MQTT Disconnected (reason: {reason_code})")
+        print("   Attempting reconnection...")
     
-    def on_mqtt_message(self, client, userdata, msg):
+    def get_kafka_topic(self, mqtt_topic):
         """
-        Callback when message received from MQTT
-        Forwards to appropriate Kafka topic
+        Map MQTT topic to Kafka topic
+        
+        Examples:
+        - air_quality/SENSOR_001/data -> smart-city-air-quality
+        - parking/LOT_DOWNTOWN_001/status -> smart-city-parking
+        - traffic/sumo/edges/edge123 -> smart-city-traffic-edges
+        """
+        for pattern, kafka_topic in self.topic_mapping.items():
+            if mqtt_topic.startswith(pattern):
+                return kafka_topic
+        
+        # Default topic for unmapped messages
+        return "smart-city-raw-data"
+    
+    def get_message_key(self, mqtt_topic, payload):
+        """
+        Extract key from message for Kafka partitioning
+        Ensures messages from same device go to same partition
         """
         try:
-            # Parse MQTT topic
-            mqtt_topic = msg.topic
-            
             # Parse payload
-            try:
-                payload = json.loads(msg.payload.decode('utf-8'))
-            except json.JSONDecodeError:
-                print(f"⚠️  Invalid JSON from {mqtt_topic}")
-                self.error_count += 1
+            data = json.loads(payload) if isinstance(payload, (str, bytes)) else payload
+            
+            # Extract device/sensor ID
+            if "sensor_id" in data:
+                return data["sensor_id"]
+            elif "parking_lot_id" in data:
+                return data["parking_lot_id"]
+            elif "vehicle_id" in data:
+                return data["vehicle_id"]
+            elif "edge_id" in data:
+                return data["edge_id"]
+            elif "traffic_light_id" in data:
+                return data["traffic_light_id"]
+            else:
+                # Use MQTT topic as key
+                return mqtt_topic.split('/')[-1]
+        
+        except:
+            return mqtt_topic
+    
+    def on_mqtt_message(self, client, userdata, msg):
+        """Callback when MQTT message received"""
+        try:
+            mqtt_topic = msg.topic
+            payload = msg.payload.decode('utf-8')
+            
+            # Skip system topics
+            if mqtt_topic.startswith('$SYS/'):
                 return
             
-            # Determine Kafka topic based on MQTT topic structure
-            kafka_topic = self.map_mqtt_to_kafka_topic(mqtt_topic, payload)
+            self.stats["messages_received"] += 1
             
-            # Add bridge metadata
-            payload['_bridge_metadata'] = {
-                'mqtt_topic': mqtt_topic,
-                'kafka_topic': kafka_topic,
-                'bridge_timestamp': datetime.now().isoformat(),
-                'message_id': self.message_count
+            # Parse JSON payload
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                print(f"⚠️  Invalid JSON from {mqtt_topic}")
+                self.stats["errors"] += 1
+                return
+            
+            # Add metadata
+            enriched_data = {
+                "mqtt_topic": mqtt_topic,
+                "timestamp": datetime.now().isoformat(),
+                "bridge_received_at": datetime.now().isoformat(),
+                "data": data
             }
             
-            # Generate message key (for partitioning)
-            message_key = self.generate_message_key(mqtt_topic, payload)
+            # Determine Kafka topic
+            kafka_topic = self.get_kafka_topic(mqtt_topic)
             
-            # Publish to Kafka
+            # Get message key for partitioning
+            message_key = self.get_message_key(mqtt_topic, data)
+            
+            # Send to Kafka
             future = self.kafka_producer.send(
-                topic=kafka_topic,
-                value=payload,
-                key=message_key
+                kafka_topic,
+                key=message_key,
+                value=enriched_data
             )
             
-            # Wait for confirmation (with timeout)
-            record_metadata = future.get(timeout=10)
+            # Wait for send confirmation (with timeout)
+            future.get(timeout=10)
             
-            self.message_count += 1
+            self.stats["messages_sent"] += 1
             
-            # Log every 10 messages
-            if self.message_count % 10 == 0:
-                print(f"📊 Forwarded {self.message_count} messages (errors: {self.error_count})")
-            
-            # Detailed log for debugging (optional)
-            if os.getenv('DEBUG', 'false').lower() == 'true':
-                print(f"\n✅ Message #{self.message_count}")
-                print(f"   MQTT:  {mqtt_topic}")
-                print(f"   Kafka: {kafka_topic} (partition {record_metadata.partition}, offset {record_metadata.offset})")
-                print(f"   Key:   {message_key}")
-                print(f"   Size:  {len(msg.payload)} bytes")
-            
-        except KafkaError as e:
-            print(f"\n❌ Kafka error: {e}")
-            print(f"   Topic: {mqtt_topic}")
-            self.error_count += 1
+            # Log every 10th message
+            if self.stats["messages_sent"] % 10 == 0:
+                print(f"✅ [{self.stats['messages_sent']}] {mqtt_topic} → {kafka_topic} (key: {message_key})")
             
         except Exception as e:
-            print(f"\n❌ Unexpected error: {e}")
-            print(f"   Topic: {mqtt_topic}")
-            self.error_count += 1
+            print(f"❌ Error processing message from {msg.topic}: {e}")
+            self.stats["errors"] += 1
     
-    def map_mqtt_to_kafka_topic(self, mqtt_topic, payload):
-        """
-        Map MQTT topic structure to Kafka topic
+    def print_stats(self):
+        """Print current statistics"""
+        uptime = (datetime.now() - self.stats["start_time"]).total_seconds()
         
-        MQTT Topics:
-        - air_quality/{sensor_id}/data
-        - parking/{lot_id}/event
-        - parking/{lot_id}/status
-        - traffic/sumo/edges/{edge_id}
-        - traffic/sumo/vehicles/{vehicle_id}
-        - traffic/sumo/traffic_lights/{tl_id}
-        - traffic/sumo/simulation/stats
-        
-        Kafka Topics:
-        - air-quality-data
-        - parking-events
-        - parking-status
-        - traffic-edges
-        - traffic-vehicles
-        - traffic-lights
-        - traffic-stats
-        """
-        
-        parts = mqtt_topic.split('/')
-        
-        # Air quality: air_quality/{sensor_id}/data
-        if parts[0] == 'air_quality':
-            return 'air-quality-data'
-        
-        # Parking: parking/{lot_id}/{event|status}
-        elif parts[0] == 'parking':
-            if len(parts) >= 3:
-                event_type = parts[2]
-                if event_type == 'event':
-                    return 'parking-events'
-                elif event_type == 'status':
-                    return 'parking-status'
-        
-        # Traffic: traffic/sumo/{category}/...
-        elif parts[0] == 'traffic' and parts[1] == 'sumo':
-            if len(parts) >= 3:
-                category = parts[2]
-                if category == 'edges':
-                    return 'traffic-edges'
-                elif category == 'vehicles':
-                    return 'traffic-vehicles'
-                elif category == 'traffic_lights':
-                    return 'traffic-lights'
-                elif category == 'simulation':
-                    return 'traffic-stats'
-        
-        # Default fallback
-        return 'iot-data-raw'
-    
-    def generate_message_key(self, mqtt_topic, payload):
-        """
-        Generate message key for Kafka partitioning
-        Ensures messages from same sensor/device go to same partition
-        """
-        
-        # Extract sensor/device ID from payload
-        sensor_id = (
-            payload.get('sensor_id') or 
-            payload.get('parking_lot_id') or 
-            payload.get('vehicle_id') or 
-            payload.get('edge_id') or 
-            payload.get('traffic_light_id') or
-            mqtt_topic.split('/')[1] if len(mqtt_topic.split('/')) > 1 else 'unknown'
-        )
-        
-        return str(sensor_id)
+        print("\n" + "=" * 80)
+        print("📊 Bridge Statistics")
+        print("=" * 80)
+        print(f"   Uptime: {uptime:.0f} seconds ({uptime/60:.1f} minutes)")
+        print(f"   Messages received (MQTT): {self.stats['messages_received']}")
+        print(f"   Messages sent (Kafka): {self.stats['messages_sent']}")
+        print(f"   Errors: {self.stats['errors']}")
+        print(f"   Throughput: {self.stats['messages_sent']/(uptime or 1):.2f} msg/s")
+        print("=" * 80 + "\n")
     
     def run(self):
-        """Main loop - start forwarding messages"""
+        """Main loop"""
+        print("\n🚀 Starting MQTT to Kafka Bridge...")
+        print("=" * 80)
+        print("   Source: MQTT Broker (10.0.1.134:1883)")
+        print("   Destination: Kafka (localhost:9093)")
+        print("   Press Ctrl+C to stop")
+        print("=" * 80 + "\n")
         
         # Setup connections
         if not self.setup_kafka():
-            print("\n❌ Cannot start without Kafka connection")
             sys.exit(1)
         
         if not self.setup_mqtt():
-            print("\n❌ Cannot start without MQTT connection")
             sys.exit(1)
         
         # Start MQTT loop
+        self.mqtt_client.loop_start()
+        
+        # Monitor and print stats periodically
         try:
-            print("\n" + "=" * 80)
-            print("▶️  Bridge running - Press Ctrl+C to stop")
-            print("=" * 80 + "\n")
-            
-            self.mqtt_client.loop_forever()
-            
+            while True:
+                time.sleep(30)  # Print stats every 30 seconds
+                self.print_stats()
+        
         except KeyboardInterrupt:
-            print("\n\n🛑 Shutting down bridge...")
-            
+            print("\n\n🛑 Stopping bridge...")
+            self.print_stats()
+        
         finally:
-            self.cleanup()
-    
-    def cleanup(self):
-        """Cleanup connections"""
-        print("\n📊 Final Statistics:")
-        print(f"   Total messages forwarded: {self.message_count}")
-        print(f"   Total errors: {self.error_count}")
-        print(f"   Success rate: {(self.message_count / (self.message_count + self.error_count) * 100):.1f}%")
-        
-        if self.mqtt_client:
-            self.mqtt_client.loop_stop()
-            self.mqtt_client.disconnect()
-            print("   ✅ Disconnected from MQTT")
-        
-        if self.kafka_producer:
-            self.kafka_producer.flush()
-            self.kafka_producer.close()
-            print("   ✅ Disconnected from Kafka")
-        
-        print("\n✅ Bridge stopped cleanly")
+            # Cleanup
+            if self.mqtt_client:
+                self.mqtt_client.loop_stop()
+                self.mqtt_client.disconnect()
+            
+            if self.kafka_producer:
+                self.kafka_producer.flush()
+                self.kafka_producer.close()
+            
+            print("✅ Bridge stopped gracefully")
 
 
 def main():
-    """Main function"""
-    
-    # Configuration from environment variables
-    mqtt_host = os.getenv('MQTT_HOST', 'localhost')
-    mqtt_port = int(os.getenv('MQTT_PORT', '1883'))
-    kafka_servers = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
-    
-    # Create and run bridge
-    bridge = MQTTToKafkaBridge(
-        mqtt_host=mqtt_host,
-        mqtt_port=mqtt_port,
-        kafka_bootstrap_servers=kafka_servers
-    )
-    
-    # Handle signals
-    def signal_handler(sig, frame):
-        print("\n\n🛑 Received interrupt signal...")
-        bridge.cleanup()
-        sys.exit(0)
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    # Run
+    """Entry point"""
+    bridge = MQTTToKafkaBridge()
     bridge.run()
 
 

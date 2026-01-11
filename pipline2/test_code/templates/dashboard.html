@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart City Vision Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0a0e27;
+            color: #e0e0e0;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            font-size: 32px;
+            color: white;
+            margin-bottom: 5px;
+        }
+
+        .subtitle {
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 14px;
+        }
+
+        .refresh-btn {
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 25px;
+            transition: transform 0.2s;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 8px rgba(0, 0, 0, 0.4);
+        }
+
+        .camera-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(700px, 1fr));
+            gap: 25px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .camera-card {
+            background: #1a1f3a;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+            border: 1px solid #2a2f4a;
+        }
+
+        .camera-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #2a2f4a;
+        }
+
+        .camera-title {
+            font-size: 22px;
+            color: #667eea;
+            font-weight: bold;
+        }
+
+        .camera-type {
+            background: #667eea;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .camera-stream {
+            width: 100%;
+            border-radius: 8px;
+            border: 3px solid #667eea;
+            margin-bottom: 15px;
+        }
+
+        .metadata-section {
+            background: #0f1429;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+
+        .metadata-title {
+            color: #667eea;
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+        }
+
+        .metadata-title::before {
+            content: "📋";
+            margin-right: 8px;
+        }
+
+        .metadata-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+        }
+
+        .metadata-item {
+            background: #1a1f3a;
+            padding: 8px;
+            border-radius: 5px;
+            font-size: 12px;
+        }
+
+        .metadata-label {
+            color: #888;
+            font-size: 10px;
+            text-transform: uppercase;
+        }
+
+        .metadata-value {
+            color: #e0e0e0;
+            font-weight: bold;
+            margin-top: 3px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .stat-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-label {
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.8);
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            color: white;
+            font-weight: bold;
+        }
+
+        .tracked-objects {
+            background: #0f1429;
+            padding: 15px;
+            border-radius: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .tracked-title {
+            color: #667eea;
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+        }
+
+        .tracked-title::before {
+            content: "🎯";
+            margin-right: 8px;
+        }
+
+        .object-item {
+            background: #1a1f3a;
+            padding: 10px;
+            margin-bottom: 8px;
+            border-radius: 5px;
+            border-left: 3px solid #667eea;
+        }
+
+        .object-id {
+            color: #667eea;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .object-details {
+            font-size: 12px;
+            color: #b0b0b0;
+            margin-top: 5px;
+        }
+
+        .loading {
+            text-align: center;
+            color: #888;
+            padding: 40px;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #1a1f3a;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #667eea;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #764ba2;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎥 Smart City Vision Dashboard</h1>
+        <div class="subtitle">Real-time AI-powered surveillance with object tracking</div>
+    </div>
+
+    <div class="refresh-btn">
+        <button onclick="location.reload()">🔄 Refresh Dashboard</button>
+    </div>
+
+    <div class="camera-grid" id="cameraGrid">
+        <div class="loading">🔄 Loading cameras...</div>
+    </div>
+
+    <script>
+        let cameras = [];
+        let cameraMetadata = {};
+
+        // Load cameras
+        async function loadCameras() {
+            try {
+                const response = await fetch('/cameras');
+                cameras = await response.json();
+
+                if (cameras.length === 0) {
+                    document.getElementById('cameraGrid').innerHTML = 
+                        '<div class="loading">⏳ No cameras detected. Waiting for data...</div>';
+                    setTimeout(loadCameras, 2000);
+                    return;
+                }
+
+                // Load metadata for each camera
+                for (const camera_id of cameras) {
+                    const metaResponse = await fetch(`/camera_metadata/${camera_id}`);
+                    cameraMetadata[camera_id] = await metaResponse.json();
+                }
+
+                renderCameras();
+                updateStats();
+            } catch (error) {
+                console.error('Error loading cameras:', error);
+                setTimeout(loadCameras, 2000);
+            }
+        }
+
+        // Render camera grid
+        function renderCameras() {
+            const grid = document.getElementById('cameraGrid');
+            grid.innerHTML = '';
+
+            cameras.forEach(camera_id => {
+                const meta = cameraMetadata[camera_id] || {};
+                const location = meta.location || {};
+
+                const card = document.createElement('div');
+                card.className = 'camera-card';
+                card.innerHTML = `
+                    <div class="camera-header">
+                        <div class="camera-title">${meta.camera_name || camera_id}</div>
+                        <div class="camera-type">${meta.camera_type || 'Unknown'}</div>
+                    </div>
+
+                    <img class="camera-stream" 
+                         src="/video_feed/${camera_id}" 
+                         alt="${camera_id}">
+
+                    <div class="metadata-section">
+                        <div class="metadata-title">Camera Information</div>
+                        <div class="metadata-grid">
+                            <div class="metadata-item">
+                                <div class="metadata-label">Camera ID</div>
+                                <div class="metadata-value">${camera_id}</div>
+                            </div>
+                            <div class="metadata-item">
+                                <div class="metadata-label">Location</div>
+                                <div class="metadata-value">${location.name || 'Unknown'}</div>
+                            </div>
+                            <div class="metadata-item">
+                                <div class="metadata-label">Coordinates</div>
+                                <div class="metadata-value">${location.lat ? location.lat.toFixed(4) : 'N/A'}, ${location.lon ? location.lon.toFixed(4) : 'N/A'}</div>
+                            </div>
+                            <div class="metadata-item">
+                                <div class="metadata-label">Resolution</div>
+                                <div class="metadata-value">${meta.width || '?'}x${meta.height || '?'}</div>
+                            </div>
+                            <div class="metadata-item">
+                                <div class="metadata-label">Encoding</div>
+                                <div class="metadata-value">${meta.encoding || 'N/A'}</div>
+                            </div>
+                            <div class="metadata-item">
+                                <div class="metadata-label">Quality</div>
+                                <div class="metadata-value">${meta.compression_quality || '?'}%</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stats-grid">
+                        <div class="stat-box">
+                            <div class="stat-label">Objects</div>
+                            <div class="stat-value" id="${camera_id}-objects">0</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">Persons</div>
+                            <div class="stat-value" id="${camera_id}-persons">0</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">Cars</div>
+                            <div class="stat-value" id="${camera_id}-cars">0</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">FPS</div>
+                            <div class="stat-value" id="${camera_id}-fps">0</div>
+                        </div>
+                    </div>
+
+                    <div class="tracked-objects" id="${camera_id}-tracked">
+                        <div class="tracked-title">Tracked Objects</div>
+                        <div id="${camera_id}-tracked-list">No objects detected</div>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        // Update stats
+        async function updateStats() {
+            try {
+                const response = await fetch('/stats');
+                const stats = await response.json();
+
+                for (const [camera_id, data] of Object.entries(stats)) {
+                    // Update counters
+                    document.getElementById(`${camera_id}-objects`).textContent = data.objects;
+                    document.getElementById(`${camera_id}-persons`).textContent = data.persons;
+                    document.getElementById(`${camera_id}-cars`).textContent = data.cars;
+                    document.getElementById(`${camera_id}-fps`).textContent = data.fps.toFixed(1);
+
+                    // Update tracked objects
+                    const trackedList = document.getElementById(`${camera_id}-tracked-list`);
+                    const tracked = data.tracked_objects || {};
+
+                    if (Object.keys(tracked).length === 0) {
+                        trackedList.innerHTML = '<div style="color: #888; text-align: center; padding: 20px;">No objects detected</div>';
+                    } else {
+                        let html = '';
+                        for (const [obj_id, obj_info] of Object.entries(tracked)) {
+                            const duration = obj_info.duration.toFixed(1);
+                            let details = `${obj_info.type}`;
+                            
+                            if (obj_info.gender) {
+                                details += ` • ${obj_info.gender}`;
+                            }
+                            if (obj_info.age) {
+                                details += ` • ${obj_info.age}`;
+                            }
+                            details += ` • ${duration}s`;
+
+                            html += `
+                                <div class="object-item">
+                                    <div class="object-id">ID: ${obj_id}</div>
+                                    <div class="object-details">${details}</div>
+                                </div>
+                            `;
+                        }
+                        trackedList.innerHTML = html;
+                    }
+                }
+            } catch (error) {
+                console.error('Error updating stats:', error);
+            }
+
+            setTimeout(updateStats, 1000);
+        }
+
+        // Start
+        loadCameras();
+    </script>
+</body>
+</html>

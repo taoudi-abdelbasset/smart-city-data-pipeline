@@ -1,0 +1,6 @@
+ultralytics
+flask
+opencv-python-headless
+numpy
+kafka-python
+scipy

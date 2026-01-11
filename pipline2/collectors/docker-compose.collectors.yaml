@@ -1,0 +1,94 @@
+# ============================================
+# KAFKA TO HDFS COLLECTORS
+# Batch collectors for IoT data streams
+# ============================================
+
+version: '3.8'
+
+services:
+  # ============================================
+  # AIR QUALITY COLLECTOR
+  # Kafka → HDFS batch writer for air quality data
+  # ============================================
+  air-quality-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    container_name: air-quality-collector
+    restart: unless-stopped
+    networks:
+      - smart-city-net
+    environment:
+      # Kafka settings
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC=smart-city-air-quality
+      - CONSUMER_GROUP=air-quality-hdfs-collector
+      
+      # Batch settings
+      - BATCH_SIZE=50
+      - BATCH_TIME=60
+      
+      # HDFS path
+      - HDFS_BASE_PATH=/smart-city/air-quality
+    command: python3 /app/air_quality_collector.py
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "air_quality_collector.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # PARKING COLLECTOR
+  # Kafka → HDFS batch writer for parking data
+  # ============================================
+  parking-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    container_name: parking-collector
+    restart: unless-stopped
+    networks:
+      - smart-city-net
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC=smart-city-parking
+      - CONSUMER_GROUP=parking-hdfs-collector
+      - BATCH_SIZE=50
+      - BATCH_TIME=60
+      - HDFS_BASE_PATH=/smart-city/parking
+    command: python3 /app/parking_collector.py
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "parking_collector.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # TRAFFIC COLLECTOR
+  # Kafka → HDFS batch writer for traffic data
+  # ============================================
+  traffic-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    container_name: traffic-collector
+    restart: unless-stopped
+    networks:
+      - smart-city-net
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CONSUMER_GROUP=traffic-hdfs-collector
+      - BATCH_SIZE=50
+      - BATCH_TIME=60
+      - HDFS_BASE_PATH=/smart-city/traffic
+    command: python3 /app/traffic_collector.py
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "traffic_collector.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  smart-city-net:
+    external: true
+    name: pipline2_smart-city-net

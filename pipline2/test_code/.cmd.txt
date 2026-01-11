@@ -1,0 +1,1 @@
+python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt'); YOLO('yolov8n-cls.pt')"

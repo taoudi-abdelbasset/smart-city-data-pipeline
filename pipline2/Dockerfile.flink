@@ -1,0 +1,65 @@
+FROM flink:1.18.1-scala_2.12
+
+# 1. Install System Dependencies (Python, Java, and Build Tools)
+RUN apt-get update -y && \
+    apt-get install -y \
+        python3 \
+        python3-pip \
+        python3-dev \
+        libgl1-mesa-glx \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender-dev \
+        libgomp1 \
+        libpq-dev \
+        gcc \
+        wget \
+        curl \
+        openjdk-11-jdk && \
+    rm -rf /var/lib/apt/lists/*
+
+# 2. Setup Python Link and Upgrade Pip
+# Added -f (force) just in case, though it won't be needed if not duplicated
+RUN ln -sf /usr/bin/python3 /usr/bin/python
+RUN pip3 install --no-cache-dir --upgrade pip
+
+# 3. Install Python Data Science & PyFlink Libraries
+RUN pip3 install --no-cache-dir \
+    apache-flink==1.18.1 \
+    kafka-python \
+    opencv-python-headless \
+    numpy \
+    scipy \
+    ultralytics \
+    psycopg2-binary
+
+# 4. Download YOLO model at build time (to avoid slow first-runs)
+RUN python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
+
+# 5. Install Hadoop client (CRITICAL FOR HDFS WRITES!)
+RUN wget https://downloads.apache.org/hadoop/common/hadoop-3.3.6/hadoop-3.3.6.tar.gz && \
+    tar -xzf hadoop-3.3.6.tar.gz -C /opt/ && \
+    rm hadoop-3.3.6.tar.gz && \
+    ln -s /opt/hadoop-3.3.6 /opt/hadoop
+
+# 6. Set Environment Variables
+ENV HADOOP_HOME=/opt/hadoop
+ENV HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+ENV PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin
+ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+
+# 7. Create Hadoop config for HDFS connection
+RUN echo '<?xml version="1.0"?>\n\
+<configuration>\n\
+  <property>\n\
+    <name>fs.defaultFS</name>\n\
+    <value>hdfs://namenode:8020</value>\n\
+  </property>\n\
+</configuration>' > /opt/hadoop/etc/hadoop/core-site.xml
+
+# 8. Download Kafka Connector JARs to Flink's lib folder
+RUN wget https://repo1.maven.org/maven2/org/apache/flink/flink-sql-connector-kafka/3.0.1-1.18/flink-sql-connector-kafka-3.0.1-1.18.jar -P /opt/flink/lib/ && \
+    wget https://repo1.maven.org/maven2/org/apache/kafka/kafka-clients/3.4.0/kafka-clients-3.4.0.jar -P /opt/flink/lib/
+
+WORKDIR /opt/flink

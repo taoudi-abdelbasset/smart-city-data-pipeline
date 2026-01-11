@@ -1,0 +1,49 @@
+# ============================================
+# UNIFIED COLLECTOR DOCKERFILE
+# Simple Python image + Hadoop client for HDFS
+# ============================================
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies + Java (needed for hdfs command)
+RUN apt-get update && apt-get install -y \
+    wget \
+    curl \
+    procps \
+    openjdk-21-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Hadoop client (just need hdfs command, not full Hadoop)
+ENV HADOOP_VERSION=3.3.6
+RUN wget https://downloads.apache.org/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz && \
+    tar -xzf hadoop-${HADOOP_VERSION}.tar.gz -C /opt/ && \
+    rm hadoop-${HADOOP_VERSION}.tar.gz && \
+    ln -s /opt/hadoop-${HADOOP_VERSION} /opt/hadoop
+
+# Set Hadoop environment variables
+ENV HADOOP_HOME=/opt/hadoop
+ENV HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+ENV PATH=$PATH:$HADOOP_HOME/bin
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+
+# Create Hadoop config for HDFS connection
+RUN echo '<?xml version="1.0"?>' > $HADOOP_CONF_DIR/core-site.xml && \
+    echo '<configuration>' >> $HADOOP_CONF_DIR/core-site.xml && \
+    echo '  <property>' >> $HADOOP_CONF_DIR/core-site.xml && \
+    echo '    <name>fs.defaultFS</name>' >> $HADOOP_CONF_DIR/core-site.xml && \
+    echo '    <value>hdfs://namenode:8020</value>' >> $HADOOP_CONF_DIR/core-site.xml && \
+    echo '  </property>' >> $HADOOP_CONF_DIR/core-site.xml && \
+    echo '</configuration>' >> $HADOOP_CONF_DIR/core-site.xml
+
+# Install Python dependencies
+RUN pip install --no-cache-dir kafka-python
+
+# Copy collector scripts
+COPY air_quality_collector.py .
+COPY parking_collector.py .
+COPY traffic_collector.py .
+
+# Default command (will be overridden in docker-compose)
+CMD ["python3", "-u", "air_quality_collector.py"]

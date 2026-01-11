@@ -1,6 +1,6 @@
 # ============================================
-# SMART CITY DATA PIPELINE - DOCKER COMPOSE
-# FIXED: Airflow can now trigger Spark jobs
+# SMART CITY DATA PIPELINE - WITH HIVE
+# Hadoop replaced with Hive for SQL analytics
 # ============================================
 
 networks:
@@ -11,9 +11,12 @@ volumes:
   namenode_data:
   datanode_data:
   postgres_data:
-  redis_data:
-  airflow_logs:
+  hive_metastore_data:
+  # redis_data:
+  # airflow_logs:
   spark_logs:
+  flink_checkpoints:
+  flink_savepoints:
 
 services:
   # ============================================
@@ -65,7 +68,7 @@ services:
       retries: 5
 
   # ============================================
-  # HDFS NAMENODE - Data Lake
+  # HADOOP NAMENODE - Data Lake (KEEP YOUR WORKING 3.3.6!)
   # ============================================
   namenode:
     image: apache/hadoop:3.3.6
@@ -100,7 +103,7 @@ services:
       retries: 3
 
   # ============================================
-  # HDFS DATANODE - Data Lake
+  # HADOOP DATANODE - Data Lake (KEEP YOUR WORKING 3.3.6!)
   # ============================================
   datanode:
     image: apache/hadoop:3.3.6
@@ -126,8 +129,75 @@ services:
         condition: service_healthy
 
   # ============================================
+  # HIVE METASTORE POSTGRES - Metadata DB
+  # ============================================
+  hive-metastore-postgres:
+    image: postgres:15-alpine
+    container_name: hive-metastore-postgres
+    networks:
+      - smart-city-net
+    environment:
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+      POSTGRES_DB: metastore
+    volumes:
+      - hive_metastore_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # HIVE METASTORE - Metadata Service (works with Hadoop 3.3.6)
+  # ============================================
+  hive-metastore:
+    image: apache/hive:4.0.0
+    container_name: hive-metastore
+    hostname: hive-metastore
+    networks:
+      - smart-city-net
+    ports:
+      - "9083:9083"
+    environment:
+      SERVICE_NAME: metastore
+      # These variables are recognized by the 4.0.0 entrypoint to auto-init
+      DB_DRIVER: postgres
+      SERVICE_OPTS: "-Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://hive-metastore-postgres:5432/metastore -Djavax.jdo.option.ConnectionUserName=hive -Djavax.jdo.option.ConnectionPassword=hive"
+    # We remove the manual 'command' and let the entrypoint handle it
+    # But we keep the healthcheck/depends_on to ensure DB is ready
+    depends_on:
+      hive-metastore-postgres:
+        condition: service_healthy
+      namenode:
+        condition: service_healthy
+    volumes:
+      - ./hadoop.env:/etc/hadoop/hadoop.env:ro
+      - ./postgresql-42.7.2.jar:/opt/hive/lib/postgresql-42.7.2.jar:ro # <--- ADD THIS
+
+  # ============================================
+  # HIVE SERVER - SQL Interface (works with Hadoop 3.3.6)
+  # ============================================
+  hiveserver2:
+    image: apache/hive:4.0.0
+    container_name: hiveserver2
+    hostname: hiveserver2
+    networks:
+      - smart-city-net
+    ports:
+      - "10000:10000"
+      - "10002:10002"
+    environment:
+      SERVICE_NAME: hiveserver2
+      # Tell HiveServer2 where to find the metastore
+      SERVICE_OPTS: "-Dhive.metastore.uris=thrift://hive-metastore:9083"
+    depends_on:
+      - hive-metastore
+    volumes:
+      - ./postgresql-42.7.2.jar:/opt/hive/lib/postgresql-42.7.2.jar:ro # <--- ADD THIS
+
+  # ============================================
   # SPARK MASTER - Processing Engine
-  # FIXED: Added port 6066 for REST API
   # ============================================
   spark-master:
     image: apache/spark:3.5.3-java17-python3
@@ -144,7 +214,6 @@ services:
       - SPARK_MASTER_HOST=spark-master
       - SPARK_MASTER_PORT=7077
       - SPARK_MASTER_WEBUI_PORT=8080
-    # FIXED COMMAND: Add --rest flag to enable REST API
     command: >
       bash -c "
       /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master \
@@ -211,26 +280,7 @@ services:
       retries: 5
 
   # ============================================
-  # REDIS - Real-time Cache
-  # ============================================
-  redis:
-    image: redis:7-alpine
-    container_name: redis
-    networks:
-      - smart-city-net
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # ============================================
-  # AIRFLOW POSTGRES - Metadata DB for Airflow
+  # AIRFLOW POSTGRES - Metadata DB (MUST BE UNCOMMENTED)
   # ============================================
   airflow-postgres:
     image: postgres:15-alpine
@@ -250,71 +300,125 @@ services:
       retries: 5
 
   # ============================================
-  # AIRFLOW WEBSERVER - Orchestration UI
-  # FIXED: Added Docker provider and requests library
+  # AIRFLOW WEBSERVER
   # ============================================
   airflow-webserver:
-    image: apache/airflow:2.8.0-python3.11
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
     container_name: airflow-webserver
     networks:
       - smart-city-net
     ports:
       - "8082:8080"
     environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
-      AIRFLOW__CORE__FERNET_KEY: 'UKMzEm3yIuFYEq1y3-2FxPNWSVwRASpahmQ9kQfEr8E='
-      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
-      AIRFLOW__WEBSERVER__SECRET_KEY: 'smartcity_secret_key_2024'
-      _AIRFLOW_DB_MIGRATE: 'true'
-      _AIRFLOW_WWW_USER_CREATE: 'true'
-      _AIRFLOW_WWW_USER_USERNAME: admin
-      _AIRFLOW_WWW_USER_PASSWORD: admin
-      # ADDED: Install packages on startup
-      _PIP_ADDITIONAL_REQUIREMENTS: "apache-airflow-providers-docker requests"
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - SPARK_HOME=/opt/spark
+      - JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
     volumes:
       - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./airflow/plugins:/opt/airflow/plugins
       - ./spark-jobs:/opt/spark-jobs
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ./hadoop.env:/etc/hadoop/hadoop.env:ro
     depends_on:
       airflow-postgres:
         condition: service_healthy
-    command: webserver
+      spark-master:
+        condition: service_healthy
+
+  airflow-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    container_name: airflow-scheduler
+    networks:
+      - smart-city-net
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      # IMPORTANT: Scheduler also needs Spark/Java paths to trigger jobs
+      - SPARK_HOME=/opt/spark
+      - JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./spark-jobs:/opt/spark-jobs
+      - ./hadoop.env:/etc/hadoop/hadoop.env:ro
+    command: scheduler
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+
+  # ============================================
+  # FLINK JOBMANAGER - Stream Processing
+  # ============================================
+  flink-jobmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile.flink
+    container_name: flink-jobmanager
+    hostname: flink-jobmanager
+    networks:
+      - smart-city-net
+    ports:
+      - "8083:8081"
+      - "6123:6123"
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 4
+        parallelism.default: 2
+    volumes:
+      - ./flink-jobs:/opt/flink-jobs
+      - flink_checkpoints:/opt/flink/checkpoints
+    command: jobmanager
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8081"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   # ============================================
-  # AIRFLOW SCHEDULER - DAG Execution
-  # FIXED: Added Docker provider and requests library
+  # FLINK TASKMANAGER - Stream Processing
   # ============================================
-  airflow-scheduler:
-    image: apache/airflow:2.8.0-python3.11
-    container_name: airflow-scheduler
+  flink-taskmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile.flink
+    container_name: flink-taskmanager
     networks:
       - smart-city-net
     environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
-      AIRFLOW__CORE__FERNET_KEY: 'UKMzEm3yIuFYEq1y3-2FxPNWSVwRASpahmQ9kQfEr8E='
-      # ADDED: Install packages on startup
-      _PIP_ADDITIONAL_REQUIREMENTS: "apache-airflow-providers-docker requests"
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 4
     volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./airflow/plugins:/opt/airflow/plugins
-      - ./spark-jobs:/opt/spark-jobs
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ./flink-jobs:/opt/flink-jobs
+    command: taskmanager
     depends_on:
-      airflow-postgres:
+      flink-jobmanager:
         condition: service_healthy
-    command: scheduler
+  
+  # ============================================
+  # TIMESCALEDB - Time-Series Database
+  # ============================================
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: timescaledb
+    networks:
+      - smart-city-net
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: smartcity
+      POSTGRES_PASSWORD: smartcity123
+      POSTGRES_DB: realtime_analytics
+    volumes:
+      - ./init-timescaledb.sql:/docker-entrypoint-initdb.d/init.sql
 
   # ============================================
   # GRAFANA - Visualization
@@ -335,7 +439,7 @@ services:
       - ./grafana/datasources:/etc/grafana/provisioning/datasources
     depends_on:
       - postgres
-      - redis
+      - timescaledb
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 30s

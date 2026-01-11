@@ -1,399 +1,298 @@
 #!/usr/bin/env python3
 """
-Smart City - RTSP Camera to Kafka Bridge
-Captures frames from RTSP streams and publishes to Kafka
-Includes camera metadata from metadata.json files
+RTSP to Kafka Bridge - Smart City Data Pipeline (AUTO-DISCOVERY)
+Discovers cameras from MQTT registry
+Dynamically connects to camera streams
+Extracts video frames and publishes to Kafka topic
 """
 
-import json
-import os
-import sys
 import cv2
-import base64
-import signal
+import json
 import time
+import sys
+import os
+import base64
+import threading
 from datetime import datetime
-from pathlib import Path
-import multiprocessing
-
-try:
-    from kafka import KafkaProducer
-    from kafka.errors import KafkaError
-    KAFKA_AVAILABLE = True
-except ImportError:
-    print("❌ kafka-python not installed. Install with: pip install kafka-python")
-    KAFKA_AVAILABLE = False
-    sys.exit(1)
-
+from kafka import KafkaProducer
+import paho.mqtt.client as mqtt
 
 class RTSPToKafkaBridge:
     """
-    Captures frames from RTSP stream and publishes to Kafka
-    Includes camera metadata (location, zone, etc.)
+    Bridge between RTSP camera streams and Kafka
+    AUTO-DISCOVERS cameras from MQTT registry
     """
     
-    def __init__(self, 
-                 camera_metadata_path,
-                 rtsp_url,
-                 kafka_bootstrap_servers="localhost:9092",
-                 fps=1,  # Capture 1 frame per second
-                 image_quality=85):
+    def __init__(self):
+        # MQTT Configuration (for camera discovery)
+        self.mqtt_host = os.getenv("MQTT_HOST", "10.0.1.134")
+        self.mqtt_port = int(os.getenv("MQTT_PORT", "1883"))
+        self.mqtt_client = None
         
-        self.metadata = self._load_metadata(camera_metadata_path)
-        self.camera_id = self.metadata['camera_id']
-        self.rtsp_url = rtsp_url
-        self.kafka_bootstrap = kafka_bootstrap_servers
-        self.fps = fps
-        self.image_quality = image_quality
-        
+        # Kafka Configuration
+        self.kafka_bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+        self.kafka_topic = "smart-city-camera-frames"
         self.kafka_producer = None
-        self.video_capture = None
         
-        self.frame_count = 0
-        self.error_count = 0
-        self.running = True
+        # Camera registry
+        self.camera_streams = {}
+        self.camera_metadata = {}
+        self.cameras_discovered = False
         
-        print(f"\n{'='*80}")
-        print(f"📹 Camera Bridge: {self.camera_id}")
-        print(f"{'='*80}")
-        print(f"RTSP URL: {rtsp_url}")
-        print(f"Kafka: {kafka_bootstrap_servers}")
-        print(f"Capture Rate: {fps} FPS")
-        print(f"Image Quality: {image_quality}%")
-        print(f"Location: {self.metadata['location']['address']}")
-        print(f"Zone: {self.metadata['location']['zone']}")
-        print(f"{'='*80}")
+        # Frame capture settings
+        self.frame_rate = int(os.getenv("FRAME_RATE", "2"))
+        self.frame_resize = (int(os.getenv("FRAME_WIDTH", "640")), int(os.getenv("FRAME_HEIGHT", "480")))
+        self.jpeg_quality = int(os.getenv("JPEG_QUALITY", "70"))
+        
+        # Threads
+        self.capture_threads = []
+        self.running = False
+        
+        # Statistics
+        self.stats = {
+            "frames_captured": 0,
+            "frames_sent": 0,
+            "errors": 0,
+            "start_time": datetime.now(),
+            "camera_stats": {}
+        }
+        
+        print("🎥 RTSP to Kafka Bridge (AUTO-DISCOVERY)")
+        print("=" * 80)
     
-    def _load_metadata(self, metadata_path):
-        """Load camera metadata from JSON file"""
-        with open(metadata_path, 'r') as f:
-            return json.load(f)
+    def setup_mqtt(self):
+        """Connect to MQTT to discover cameras"""
+        print(f"\n📡 Connecting to MQTT: {self.mqtt_host}:{self.mqtt_port}")
+        
+        try:
+            self.mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+            self.mqtt_client.on_connect = self.on_mqtt_connect
+            self.mqtt_client.on_message = self.on_mqtt_message
+            self.mqtt_client.connect(self.mqtt_host, self.mqtt_port, 60)
+            self.mqtt_client.loop_start()
+            print("✅ Connected to MQTT!")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to connect to MQTT: {e}")
+            return False
+    
+    def on_mqtt_connect(self, client, userdata, flags, reason_code, properties):
+        """Subscribe to camera registry"""
+        print("🔔 Subscribing to camera registry...")
+        client.subscribe("cameras/registry/list", qos=1)
+        client.subscribe("cameras/+/info", qos=1)
+        print("✅ Subscribed!")
+    
+    def on_mqtt_message(self, client, userdata, msg):
+        """Process camera registry messages"""
+        try:
+            topic = msg.topic
+            payload = json.loads(msg.payload.decode('utf-8'))
+            
+            if topic == "cameras/registry/list":
+                print(f"\n📋 Received camera list")
+                self.process_camera_list(payload)
+            elif topic.startswith("cameras/") and topic.endswith("/info"):
+                camera_id = topic.split('/')[1]
+                self.process_camera_info(camera_id, payload)
+        except Exception as e:
+            print(f"⚠️  MQTT error: {e}")
+    
+    def process_camera_list(self, data):
+        """Build camera streams from registry"""
+        cameras = data.get('cameras', [])
+        print(f"   Found {len(cameras)} cameras")
+        
+        for camera in cameras:
+            camera_id = camera.get('camera_id')
+            rtsp_url = camera.get('rtsp', {}).get('url')
+            
+            if camera_id and rtsp_url:
+                self.camera_streams[camera_id] = rtsp_url
+                self.camera_metadata[camera_id] = camera
+                self.stats["camera_stats"][camera_id] = {"captured": 0, "sent": 0, "errors": 0}
+                print(f"   ✅ {camera_id}: {rtsp_url}")
+        
+        self.cameras_discovered = True
+        print(f"\n🎯 Discovery complete: {len(self.camera_streams)} cameras")
+    
+    def process_camera_info(self, camera_id, data):
+        """Update camera info"""
+        rtsp_url = data.get('rtsp', {}).get('url')
+        if rtsp_url and camera_id not in self.camera_streams:
+            print(f"\n🆕 New camera: {camera_id}")
+            self.camera_streams[camera_id] = rtsp_url
+            self.camera_metadata[camera_id] = data
+            self.stats["camera_stats"][camera_id] = {"captured": 0, "sent": 0, "errors": 0}
+    
+    def wait_for_cameras(self, timeout=30):
+        """Wait for camera discovery"""
+        print(f"\n⏳ Waiting for cameras (timeout: {timeout}s)...")
+        start = time.time()
+        while not self.cameras_discovered and (time.time() - start) < timeout:
+            time.sleep(1)
+        return self.cameras_discovered
     
     def setup_kafka(self):
-        """Initialize Kafka producer with optimized settings for images"""
-        print(f"\n📡 Connecting to Kafka...")
+        """Connect to Kafka"""
+        print(f"\n📤 Connecting to Kafka: {self.kafka_bootstrap_servers}")
         
         try:
             self.kafka_producer = KafkaProducer(
-                bootstrap_servers=self.kafka_bootstrap,
+                bootstrap_servers=self.kafka_bootstrap_servers,
                 value_serializer=lambda v: json.dumps(v).encode('utf-8'),
                 key_serializer=lambda k: k.encode('utf-8') if k else None,
-                
-                # Optimized for large messages (images)
-                max_request_size=10485760,  # 10 MB
-                buffer_memory=33554432,      # 32 MB
+                max_request_size=10485760,
+                buffer_memory=33554432,
                 compression_type='gzip',
-                
                 acks='all',
-                retries=3,
-                max_in_flight_requests_per_connection=1
+                retries=3
             )
-            
-            print(f"✅ Connected to Kafka!")
+            print("✅ Connected to Kafka!")
             return True
-            
         except Exception as e:
             print(f"❌ Failed to connect to Kafka: {e}")
             return False
     
-    def setup_video_capture(self):
-        """Initialize video capture from RTSP stream"""
-        print(f"\n📹 Connecting to RTSP stream...")
-        
-        try:
-            self.video_capture = cv2.VideoCapture(self.rtsp_url)
-            
-            # Set buffer size to 1 (latest frame)
-            self.video_capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            
-            # Check if stream opened
-            if not self.video_capture.isOpened():
-                raise Exception("Failed to open RTSP stream")
-            
-            # Test read
-            ret, frame = self.video_capture.read()
-            if not ret or frame is None:
-                raise Exception("Failed to read frame from stream")
-            
-            print(f"✅ Connected to RTSP stream!")
-            print(f"   Frame size: {frame.shape[1]}x{frame.shape[0]}")
-            
-            return True
-            
-        except Exception as e:
-            print(f"❌ Failed to connect to RTSP: {e}")
-            return False
-    
-    def capture_and_publish(self):
-        """Main loop: capture frames and publish to Kafka"""
-        
-        frame_interval = 1.0 / self.fps
-        last_capture_time = 0
-        
-        print(f"\n{'='*80}")
-        print(f"🚀 Starting frame capture for {self.camera_id}")
-        print(f"{'='*80}\n")
+    def capture_camera_stream(self, camera_id, rtsp_url):
+        """Capture frames from camera"""
+        print(f"🎥 Starting: {camera_id}")
+        cap = None
         
         while self.running:
             try:
-                current_time = time.time()
+                if cap is None or not cap.isOpened():
+                    cap = cv2.VideoCapture(rtsp_url)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    if not cap.isOpened():
+                        time.sleep(5)
+                        continue
+                    print(f"✅ Connected: {camera_id}")
                 
-                # Check if it's time to capture
-                if current_time - last_capture_time < frame_interval:
-                    time.sleep(0.01)  # Small sleep to prevent CPU spinning
-                    continue
-                
-                last_capture_time = current_time
-                
-                # Capture frame
-                ret, frame = self.video_capture.read()
-                
-                if not ret or frame is None:
-                    print(f"⚠️  Failed to read frame - reconnecting...")
-                    self.error_count += 1
-                    
-                    # Try to reconnect
-                    self.video_capture.release()
-                    time.sleep(2)
-                    
-                    if not self.setup_video_capture():
-                        print(f"❌ Cannot reconnect to stream")
-                        break
-                    
-                    continue
-                
-                # Encode frame to JPEG
-                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), self.image_quality]
-                ret, buffer = cv2.imencode('.jpg', frame, encode_param)
-                
+                ret, frame = cap.read()
                 if not ret:
-                    print(f"⚠️  Failed to encode frame")
-                    self.error_count += 1
+                    cap.release()
+                    cap = None
+                    time.sleep(5)
                     continue
                 
-                # Convert to base64
-                frame_base64 = base64.b64encode(buffer).decode('utf-8')
-                
-                # Create message payload
-                payload = {
-                    # Device metadata
-                    "device_type": "rtsp_camera",
-                    "camera_id": self.camera_id,
-                    "camera_name": self.metadata['camera_name'],
-                    "timestamp": datetime.now().isoformat(),
-                    
-                    # Location
-                    "location": self.metadata['location'],
-                    
-                    # Frame data
-                    "frame": {
-                        "frame_number": self.frame_count,
-                        "width": frame.shape[1],
-                        "height": frame.shape[0],
-                        "format": "jpeg",
-                        "quality": self.image_quality,
-                        "size_bytes": len(buffer),
-                        "data": frame_base64  # Base64 encoded JPEG
-                    },
-                    
-                    # Camera capabilities (from metadata)
-                    "capabilities": self.metadata.get('capabilities', {}),
-                    
-                    # Monitoring info
-                    "monitoring": self.metadata.get('monitoring', {}),
-                    
-                    # Bridge metadata
-                    "_bridge_metadata": {
-                        "rtsp_url": self.rtsp_url,
-                        "kafka_topic": "camera-frames",
-                        "bridge_timestamp": datetime.now().isoformat(),
-                        "frame_id": self.frame_count
-                    }
-                }
-                
-                # Publish to Kafka
-                future = self.kafka_producer.send(
-                    topic='camera-frames',
-                    value=payload,
-                    key=self.camera_id
-                )
-                
-                # Wait for confirmation
-                record_metadata = future.get(timeout=10)
-                
-                self.frame_count += 1
-                
-                # Log every 10 frames
-                if self.frame_count % 10 == 0:
-                    print(f"📸 [{self.camera_id}] Captured {self.frame_count} frames "
-                          f"(errors: {self.error_count}) - "
-                          f"Last frame: {len(buffer)/1024:.1f} KB")
-                
-                # Detailed log (optional)
-                if os.getenv('DEBUG', 'false').lower() == 'true':
-                    print(f"\n✅ Frame #{self.frame_count}")
-                    print(f"   Camera: {self.camera_id}")
-                    print(f"   Size: {frame.shape[1]}x{frame.shape[0]}")
-                    print(f"   JPEG: {len(buffer)/1024:.1f} KB")
-                    print(f"   Kafka partition: {record_metadata.partition}, offset: {record_metadata.offset}")
-                
-            except KafkaError as e:
-                print(f"\n❌ Kafka error: {e}")
-                self.error_count += 1
-                time.sleep(1)
-                
-            except KeyboardInterrupt:
-                print(f"\n\n🛑 Stopping capture for {self.camera_id}...")
-                self.running = False
-                break
+                self.stats["frames_captured"] += 1
+                self.stats["camera_stats"][camera_id]["captured"] += 1
+                self.process_and_send_frame(camera_id, frame)
+                time.sleep(1.0 / self.frame_rate)
                 
             except Exception as e:
-                print(f"\n❌ Unexpected error: {e}")
-                self.error_count += 1
-                time.sleep(1)
+                print(f"❌ Error {camera_id}: {e}")
+                self.stats["errors"] += 1
+                if cap:
+                    cap.release()
+                    cap = None
+                time.sleep(5)
+        
+        if cap:
+            cap.release()
+    
+    def process_and_send_frame(self, camera_id, frame):
+        """Encode and send frame to Kafka"""
+        try:
+            frame = cv2.resize(frame, self.frame_resize)
+            _, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
+            frame_b64 = base64.b64encode(encoded).decode('utf-8')
+            
+            metadata = self.camera_metadata.get(camera_id, {})
+            
+            message = {
+                "camera_id": camera_id,
+                "camera_name": metadata.get('camera_name', camera_id),
+                "location": metadata.get('location', {}),
+                "camera_type": metadata.get('camera_type', 'unknown'),
+                "timestamp": datetime.now().isoformat(),
+                "frame_timestamp": time.time(),
+                "width": self.frame_resize[0],
+                "height": self.frame_resize[1],
+                "encoding": "jpeg",
+                "compression_quality": self.jpeg_quality,
+                "frame_data": frame_b64,
+                "frame_size_bytes": len(frame_b64)
+            }
+            
+            self.kafka_producer.send(self.kafka_topic, key=camera_id, value=message).get(timeout=5)
+            
+            self.stats["frames_sent"] += 1
+            self.stats["camera_stats"][camera_id]["sent"] += 1
+            
+            if self.stats["frames_sent"] % 10 == 0:
+                print(f"✅ [{self.stats['frames_sent']}] {camera_id} → Kafka ({len(frame_b64)/1024:.1f} KB)")
+                
+        except Exception as e:
+            print(f"❌ Send error {camera_id}: {e}")
+            self.stats["errors"] += 1
+            self.stats["camera_stats"][camera_id]["errors"] += 1
+    
+    def print_stats(self):
+        """Print statistics"""
+        uptime = (datetime.now() - self.stats["start_time"]).total_seconds()
+        print("\n" + "=" * 80)
+        print("📊 Statistics")
+        print("=" * 80)
+        print(f"   Uptime: {uptime:.0f}s ({uptime/60:.1f}m)")
+        print(f"   Cameras: {len(self.camera_streams)}")
+        print(f"   Frames: {self.stats['frames_sent']}")
+        print(f"   Errors: {self.stats['errors']}")
+        print(f"   Rate: {self.stats['frames_sent']/(uptime or 1):.2f} fps")
+        for cam, stats in self.stats["camera_stats"].items():
+            print(f"      {cam}: {stats['sent']} sent, {stats['errors']} errors")
+        print("=" * 80 + "\n")
     
     def run(self):
-        """Start the bridge"""
+        """Main loop"""
+        print("\n🚀 Starting Bridge...")
+        print("=" * 80)
+        print(f"   MQTT: {self.mqtt_host}:{self.mqtt_port}")
+        print(f"   Kafka: {self.kafka_bootstrap_servers}")
+        print(f"   Settings: {self.frame_rate}fps, {self.frame_resize}, {self.jpeg_quality}% quality")
+        print("=" * 80 + "\n")
         
-        # Setup Kafka
+        if not self.setup_mqtt():
+            sys.exit(1)
+        
+        if not self.wait_for_cameras():
+            print("⚠️  No cameras found, waiting...")
+        
         if not self.setup_kafka():
-            print(f"\n❌ Cannot start without Kafka connection")
-            return False
+            sys.exit(1)
         
-        # Setup video capture
-        if not self.setup_video_capture():
-            print(f"\n❌ Cannot start without RTSP connection")
-            return False
+        self.running = True
         
-        # Start capturing
+        for camera_id, rtsp_url in self.camera_streams.items():
+            thread = threading.Thread(target=self.capture_camera_stream, args=(camera_id, rtsp_url), daemon=True)
+            thread.start()
+            self.capture_threads.append(thread)
+            time.sleep(1)
+        
         try:
-            self.capture_and_publish()
+            while True:
+                time.sleep(30)
+                self.print_stats()
+        except KeyboardInterrupt:
+            print("\n🛑 Stopping...")
+            self.running = False
+            self.print_stats()
         finally:
-            self.cleanup()
-        
-        return True
-    
-    def cleanup(self):
-        """Cleanup resources"""
-        print(f"\n📊 Statistics for {self.camera_id}:")
-        print(f"   Total frames captured: {self.frame_count}")
-        print(f"   Total errors: {self.error_count}")
-        if self.frame_count > 0:
-            print(f"   Success rate: {(self.frame_count / (self.frame_count + self.error_count) * 100):.1f}%")
-        
-        if self.video_capture:
-            self.video_capture.release()
-            print(f"   ✅ Released video capture")
-        
-        if self.kafka_producer:
-            self.kafka_producer.flush()
-            self.kafka_producer.close()
-            print(f"   ✅ Closed Kafka producer")
-
-
-def run_camera_bridge(camera_folder, rtsp_url, kafka_servers, fps, quality):
-    """
-    Run bridge for single camera in separate process
-    """
-    metadata_path = camera_folder / "metadata.json"
-    
-    bridge = RTSPToKafkaBridge(
-        camera_metadata_path=metadata_path,
-        rtsp_url=rtsp_url,
-        kafka_bootstrap_servers=kafka_servers,
-        fps=fps,
-        image_quality=quality
-    )
-    
-    bridge.run()
+            for thread in self.capture_threads:
+                thread.join(timeout=5)
+            if self.mqtt_client:
+                self.mqtt_client.loop_stop()
+                self.mqtt_client.disconnect()
+            if self.kafka_producer:
+                self.kafka_producer.flush()
+                self.kafka_producer.close()
+            print("✅ Stopped")
 
 
 def main():
-    """
-    Main function - starts bridges for all cameras
-    """
-    
-    print("=" * 80)
-    print("📹 RTSP to Kafka Bridge - Multi-Camera")
-    print("=" * 80)
-    
-    # Configuration
-    kafka_servers = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
-    rtsp_server = os.getenv('RTSP_SERVER', 'localhost')
-    rtsp_port = int(os.getenv('RTSP_PORT', '8554'))
-    fps = int(os.getenv('CAPTURE_FPS', '1'))
-    quality = int(os.getenv('IMAGE_QUALITY', '85'))
-    
-    # Find camera folders
-    cameras_dir = Path("cameras")
-    
-    if not cameras_dir.exists():
-        print("❌ 'cameras/' folder not found")
-        print("   Make sure you're running from camera-analytics directory")
-        sys.exit(1)
-    
-    camera_folders = [f for f in cameras_dir.iterdir() if f.is_dir()]
-    
-    if not camera_folders:
-        print("❌ No camera folders found")
-        sys.exit(1)
-    
-    print(f"\n📹 Found {len(camera_folders)} cameras")
-    print("=" * 80)
-    
-    # Build RTSP URLs for each camera
-    camera_configs = []
-    for i, folder in enumerate(sorted(camera_folders), 1):
-        rtsp_url = f"rtsp://{rtsp_server}:{rtsp_port}/stream{i}"
-        camera_configs.append((folder, rtsp_url))
-        print(f"   {folder.name}: {rtsp_url}")
-    
-    print("\n" + "=" * 80)
-    print("🚀 Starting camera bridges...")
-    print(f"   Kafka: {kafka_servers}")
-    print(f"   Capture Rate: {fps} FPS")
-    print(f"   Image Quality: {quality}%")
-    print("=" * 80 + "\n")
-    
-    # Start each camera in separate process
-    processes = []
-    
-    try:
-        for folder, rtsp_url in camera_configs:
-            p = multiprocessing.Process(
-                target=run_camera_bridge,
-                args=(folder, rtsp_url, kafka_servers, fps, quality)
-            )
-            p.start()
-            processes.append(p)
-            print(f"✅ Started bridge for {folder.name}")
-            time.sleep(1)  # Stagger starts
-        
-        print(f"\n🔥 All {len(processes)} camera bridges running!")
-        print("   Press Ctrl+C to stop all\n")
-        
-        # Wait for all processes
-        for p in processes:
-            p.join()
-    
-    except KeyboardInterrupt:
-        print("\n\n🛑 Stopping all camera bridges...")
-        
-        for p in processes:
-            p.terminate()
-        
-        # Wait for graceful shutdown
-        time.sleep(2)
-        
-        # Force kill if needed
-        for p in processes:
-            if p.is_alive():
-                p.kill()
-        
-        for p in processes:
-            p.join()
-        
-        print("✅ All camera bridges stopped")
+    bridge = RTSPToKafkaBridge()
+    bridge.run()
 
 
 if __name__ == "__main__":
