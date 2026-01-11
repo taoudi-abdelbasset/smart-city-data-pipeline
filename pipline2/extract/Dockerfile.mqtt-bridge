@@ -1,0 +1,13 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy bridge script
+COPY mqtt_to_kafka_bridge.py .
+
+# Run bridge
+CMD ["python3", "-u", "mqtt_to_kafka_bridge.py"]

@@ -1,0 +1,85 @@
+version: '3.8'
+
+# Data Bridges - Connects IoT simulators to Kafka pipeline
+# Run this AFTER starting both data-simulators and pipline2
+
+networks:
+  smart-city-network:
+    external: true  # Connect to simulators network
+  smart-city-net:
+    external: true  # Connect to pipeline network
+
+services:
+  # ============================================
+  # MQTT to Kafka Bridge
+  # Forwards IoT sensor data to Kafka
+  # ============================================
+  mqtt-kafka-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.mqtt-bridge
+    container_name: smart-city-mqtt-bridge
+    restart: unless-stopped
+    networks:
+      - smart-city-network  # Access MQTT broker
+      - smart-city-net      # Access Kafka
+    environment:
+      # MQTT Configuration (from simulators)
+      - MQTT_HOST=10.0.1.134
+      - MQTT_PORT=1883
+      
+      # Kafka Configuration (from pipeline)
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      
+      # Optional: Enable debug logging
+      - DEBUG=false
+    depends_on:
+      - mosquitto
+      - kafka
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "mqtt_to_kafka_bridge.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # RTSP to Kafka Bridge
+  # Captures camera frames and sends to Kafka
+  # ============================================
+  rtsp-kafka-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.rtsp-bridge
+    container_name: smart-city-rtsp-bridge
+    restart: unless-stopped
+    networks:
+      - smart-city-network  # Access MediaMTX
+      - smart-city-net      # Access Kafka
+    environment:
+      # RTSP Configuration (from simulators)
+      - RTSP_SERVER=10.0.1.134
+      - RTSP_PORT=8554
+      
+      # Kafka Configuration (from pipeline)
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      
+      # Capture settings
+      - CAPTURE_FPS=1           # 1 frame per second
+      - IMAGE_QUALITY=85        # JPEG quality (0-100)
+      
+      # Optional: Enable debug logging
+      - DEBUG=false
+    volumes:
+      # Mount camera metadata
+      - ./camera-analytics/cameras:/app/cameras:ro
+    depends_on:
+      - mediamtx
+      - kafka
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "rtsp_to_kafka_bridge.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# Note: mosquitto, mediamtx, and kafka are defined in other compose files
+# This compose file assumes they're already running

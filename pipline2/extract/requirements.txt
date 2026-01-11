@@ -1,0 +1,5 @@
+paho-mqtt
+kafka-python
+opencv-python
+numpy
+pillow
